@@ -44,6 +44,13 @@ from datetime import datetime
 
 import httpx
 
+try:
+    from zoneinfo import ZoneInfo
+    NY = ZoneInfo("America/New_York")
+except Exception:
+    from datetime import timezone as _tz, timedelta as _td
+    NY = _tz(_td(hours=-4))
+
 TD_BASE    = "https://api.tradier.com/v1"
 TD_TOKEN   = os.getenv("TRADIER_PROD_TOKEN", "").strip()
 TD_TIMEOUT = float(os.getenv("TD_TIMEOUT", "8"))
@@ -58,6 +65,8 @@ UNDERLYINGS = {
 }
 
 _CACHE = {}
+_EXPS = {}          # {underlying: (ts, [تواريخ])}
+CUTOFF_NY = (16, 15)   # بعده تُعرض سلسلة الانتهاء التالي
 _HIST = {}          # {underlying: [(ts, {(strike,side): vol})]}
 HIST_KEEP_SEC = 1800
 DELTA_WINDOW = 300  # نافذة التغيّر بالثواني (5 دقائق)
@@ -129,6 +138,61 @@ def _spot_by_parity(rows):
     return round(best + (c - p), 2)
 
 
+def session_state():
+    """حالة الجلسة بتوقيت نيويورك: قبل الافتتاح · مفتوح · بعد الإغلاق · عطلة."""
+    ny = datetime.now(NY)
+    hm = ny.hour * 60 + ny.minute
+    if ny.weekday() >= 5:
+        return "closed", "السوق مغلق"
+    if hm < 4 * 60:
+        return "closed", "خارج التداول"
+    if hm < 9 * 60 + 30:
+        return "pre", "قبل الافتتاح"
+    if hm <= 16 * 60:
+        return "open", "السوق مفتوح"
+    if hm <= 20 * 60:
+        return "post", "بعد الإغلاق"
+    return "closed", "خارج التداول"
+
+
+def _expirations(q_sym, force=False):
+    """قائمة تواريخ الانتهاء المتاحة من Tradier — مع cache خمس دقائق."""
+    now = datetime.now().timestamp()
+    c = _EXPS.get(q_sym)
+    if not force and c and (now - c[0]) < 300 and c[1]:
+        return c[1]
+    js, err = _get("/markets/options/expirations",
+                   {"symbol": q_sym, "includeAllRoots": "true"})
+    if err or not isinstance(js, dict):
+        return []
+    out = [str(d) for d in _listify(js.get("expirations"), "date")]
+    out.sort()
+    if out:
+        _EXPS[q_sym] = (now, out)
+    return out
+
+
+def pick_expiration(q_sym):
+    """أقرب انتهاء صالح للعرض. يرجع (تاريخ, وسم).
+
+       قبل 16:15 بتوقيت نيويورك ⇒ انتهاء اليوم (الأحجام تتراكم من الافتتاح).
+       بعده ⇒ الانتهاء التالي، لأن سلسلة اليوم انتهت وتُصفَّر بعد التسوية."""
+    ny = datetime.now(NY)
+    today = ny.strftime("%Y-%m-%d")
+    after = (ny.hour, ny.minute) >= CUTOFF_NY
+    exps = _expirations(q_sym)
+    if not exps:
+        return today, ("اليوم" if not after else "اليوم (منتهٍ)")
+    future = [d for d in exps if d >= today]
+    if not future:
+        return exps[-1], "آخر متاح"
+    if after and future[0] == today and len(future) > 1:
+        return future[1], "الجلسة القادمة"
+    if future[0] == today:
+        return today, "اليوم"
+    return future[0], "الجلسة القادمة"
+
+
 def fetch(underlying="SPY", expiration=None, n=None, force=False):
     """يجلب السلسلة كاملة ويبني جدول السيولة. يرجع dict جاهزاً للعرض."""
     underlying = str(underlying).upper()
@@ -142,7 +206,10 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         return c["data"]
 
     q_sym = UNDERLYINGS[underlying][0]
-    exp = expiration or datetime.now().strftime("%Y-%m-%d")
+    if expiration:
+        exp, exp_tag = expiration, "مخصّص"
+    else:
+        exp, exp_tag = pick_expiration(q_sym)
 
     js, err = _get("/markets/options/chains",
                    {"symbol": q_sym, "expiration": exp, "greeks": "false"})
@@ -256,6 +323,10 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
 
     data = {
         "ok": True, "underlying": underlying, "expiration": exp,
+        "exp_tag": exp_tag,
+        "exp_disp": "-".join(reversed(exp.split("-"))),
+        "session": session_state()[0], "session_txt": session_state()[1],
+        "ny_time": datetime.now(NY).strftime("%H:%M"),
         "spot": round(spot, 2), "spot_src": spot_src, "spacing": spacing,
         "ts": datetime.now().strftime("%H:%M:%S"),
         "table": table,
@@ -302,7 +373,7 @@ def snapshot_row(underlying="SPY", tag="", trade_key=""):
 def debug(underlying="SPY"):
     """يعرض أول عقد خاماً كما يرجعه Tradier — للتحقق من أسماء الحقول."""
     q_sym = UNDERLYINGS.get(str(underlying).upper(), ("SPY",))[0]
-    exp = datetime.now().strftime("%Y-%m-%d")
+    exp, _tag = pick_expiration(q_sym)
     js, err = _get("/markets/options/chains",
                    {"symbol": q_sym, "expiration": exp, "greeks": "false"})
     if err:
@@ -311,6 +382,8 @@ def debug(underlying="SPY"):
     if not raw:
         return {"ok": False, "err": "سلسلة فارغة", "expiration": exp}
     return {"ok": True, "count": len(raw), "expiration": exp,
+            "ny_now": datetime.now(NY).strftime("%Y-%m-%d %H:%M"),
+            "expirations": _expirations(q_sym)[:6],
             "fields": sorted(raw[0].keys()), "sample": raw[0]}
 
 
@@ -327,6 +400,8 @@ def health():
             "symbols": list(UNDERLYINGS.keys()),
             "strikes": LIQ_STRIKES, "cache_sec": LIQ_CACHE_SEC,
             "delta_window": DELTA_WINDOW,
+            "ny_now": datetime.now(NY).strftime("%Y-%m-%d %H:%M"),
+            "spy_exp": pick_expiration("SPY"), "spx_exp": pick_expiration("SPX"),
             "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
@@ -372,63 +447,70 @@ PAGE = """<!doctype html><html lang="ar" dir="rtl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a0d13">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>سيولة __U__</title>
 <style>
-:root{--bg:#0a0d13;--card:#121722;--card2:#161c29;--line:#1e2634;--tx:#e8edf5;
---dim:#7d8ba3;--faint:#4d5a70;--up:#2dd4a0;--dn:#ff5c72;--acc:#4a90ff;--warn:#ffb547}
+:root{--bg:#0a0d13;--c1:#121824;--c2:#171f2e;--ln:#212b3c;--tx:#e9eef6;
+--dim:#7f8da5;--ft:#4e5c74;--up:#2dd4a0;--dn:#ff5c72;--ac:#4a90ff;--wr:#ffb547}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{overflow-x:hidden}
 body{margin:0;background:var(--bg);color:var(--tx);
- font-family:-apple-system,BlinkMacSystemFont,system-ui,"SF Pro Text",sans-serif;
- padding:14px 12px 28px;font-variant-numeric:tabular-nums;
- background-image:radial-gradient(900px 420px at 88% -8%,#16233a 0%,transparent 62%),
-                  radial-gradient(700px 380px at 6% 104%,#1a1526 0%,transparent 58%);
+ font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+ font-variant-numeric:tabular-nums;
+ padding:calc(env(safe-area-inset-top,0px) + 14px) 10px
+         calc(env(safe-area-inset-bottom,0px) + 26px);
+ background-image:radial-gradient(760px 380px at 90% -10%,#16233a 0,transparent 60%),
+                  radial-gradient(620px 340px at 4% 106%,#1b1527 0,transparent 56%);
  background-attachment:fixed}
-.hd{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px}
-.tabs{display:flex;gap:6px}
-.tab{padding:7px 16px;border-radius:11px;font-size:13px;font-weight:600;text-decoration:none;
- background:var(--card);color:var(--dim);border:1px solid var(--line);transition:.15s}
-.tab.on{background:var(--acc);color:#fff;border-color:var(--acc)}
-.px{text-align:left;line-height:1}
-.px b{font-size:30px;font-weight:700;letter-spacing:-.6px}
-.px s{display:block;font-size:11px;color:var(--dim);text-decoration:none;margin-top:5px}
-.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--up);
- margin-left:5px;vertical-align:middle;animation:p 2s infinite}
-@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:13px}
-.st{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 8px;text-align:center}
-.st u{display:block;font-size:10px;color:var(--dim);text-decoration:none;margin-bottom:4px}
-.st b{font-size:15px;font-weight:700}
-.tbl{background:var(--card);border:1px solid var(--line);border-radius:15px;overflow:hidden}
-.hdr{display:grid;grid-template-columns:44px 1fr 46px 42px 40px;gap:6px;padding:9px 11px;
- font-size:9.5px;color:var(--dim);border-bottom:1px solid var(--line);text-align:center}
-.rw{display:grid;grid-template-columns:44px 1fr 46px 42px 40px;gap:6px;padding:7px 11px;
- align-items:center;border-bottom:1px solid rgba(30,38,52,.55);font-size:12px}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.tabs{display:flex;gap:6px;flex:0 0 auto}
+.tab{padding:9px 17px;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;
+ background:var(--c1);color:var(--dim);border:1px solid var(--ln)}
+.tab.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.px{text-align:left;line-height:1.05;min-width:0}
+.px b{font-size:27px;font-weight:700;letter-spacing:-.5px;display:block}
+.px .sub{font-size:10.5px;color:var(--dim);margin-top:5px;white-space:nowrap}
+.bdg{display:inline-block;padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;
+ margin-inline-start:5px;vertical-align:1px}
+.exp{background:var(--c1);border:1px solid var(--ln);border-radius:11px;
+ padding:8px 11px;margin-bottom:10px;font-size:11.5px;color:var(--dim);
+ display:flex;justify-content:space-between;align-items:center;gap:8px}
+.exp b{color:var(--tx);font-weight:600}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:11px}
+.st{background:var(--c1);border:1px solid var(--ln);border-radius:12px;padding:9px 4px;text-align:center}
+.st u{display:block;font-size:9.5px;color:var(--dim);text-decoration:none;margin-bottom:4px}
+.st b{font-size:16px;font-weight:700}
+.tbl{background:var(--c1);border:1px solid var(--ln);border-radius:15px;overflow:hidden}
+.hdr{display:grid;grid-template-columns:42px 1fr 52px 38px;gap:5px;padding:8px 9px;
+ font-size:9px;color:var(--dim);text-align:center;border-bottom:1px solid var(--ln)}
+.rw{display:grid;grid-template-columns:42px 1fr 52px 38px;gap:5px;padding:6px 9px;
+ align-items:center;border-bottom:1px solid rgba(33,43,60,.5)}
 .rw:last-child{border-bottom:none}
-.rw.pin{background:rgba(255,181,71,.07)}
-.sk{font-weight:700;font-size:13px;text-align:center}
-.bw{position:relative;height:19px;background:rgba(255,255,255,.035);border-radius:5px;overflow:hidden}
-.bf{position:absolute;inset-inline-start:0;top:0;height:100%;border-radius:5px;transition:width .4s ease}
-.bv{position:absolute;inset-inline-start:7px;top:0;height:19px;line-height:19px;
- font-size:11px;font-weight:700}
-.oi{text-align:center;color:var(--dim);font-size:11.5px}
-.oi.big{color:var(--warn);font-weight:700}
-.pr{text-align:center;font-size:11.5px;font-weight:600}
-.dl{text-align:center;font-size:10.5px;color:var(--faint)}
-.dl.hot{color:var(--up);font-weight:700}
-.spot{display:flex;align-items:center;justify-content:center;gap:9px;padding:11px;
- background:linear-gradient(90deg,rgba(74,144,255,.10),rgba(74,144,255,.19),rgba(74,144,255,.10));
- border-top:1px solid rgba(74,144,255,.35);border-bottom:1px solid rgba(74,144,255,.35);
- font-size:14px;font-weight:700;color:#8ab6ff}
-.chips{margin-top:14px}
-.ctitle{font-size:10.5px;color:var(--dim);margin-bottom:7px;padding-inline-start:3px}
-.crow{display:flex;gap:6px;overflow-x:auto;padding-bottom:5px;scrollbar-width:none}
+.rw.pin{background:rgba(255,181,71,.075)}
+.sk{font-weight:700;font-size:13.5px;text-align:center}
+.bw{position:relative;height:20px;background:rgba(255,255,255,.032);border-radius:5px;overflow:hidden}
+.bf{position:absolute;inset-inline-start:0;top:0;height:100%;border-radius:5px;transition:width .45s}
+.bv{position:absolute;inset-inline-start:7px;top:0;line-height:20px;font-size:11px;font-weight:700}
+.pp{text-align:center;line-height:1.35;font-size:10.5px;font-weight:600}
+.pp i{font-style:normal;display:block}
+.rt{text-align:center;line-height:1.35;font-size:9.5px;color:var(--dim)}
+.rt i{font-style:normal;display:block}
+.rt .hot{color:var(--up);font-weight:700}
+.rt .big{color:var(--wr);font-weight:700}
+.spot{display:flex;align-items:center;justify-content:center;gap:8px;padding:11px 8px;
+ font-size:14px;font-weight:700;color:#8ab6ff;
+ background:linear-gradient(90deg,rgba(74,144,255,.09),rgba(74,144,255,.2),rgba(74,144,255,.09));
+ border-top:1px solid rgba(74,144,255,.4);border-bottom:1px solid rgba(74,144,255,.4)}
+.spot.dim{color:#8c96ab;background:rgba(255,255,255,.035);
+ border-color:rgba(255,255,255,.13);border-style:dashed}
+.ctitle{font-size:10.5px;color:var(--dim);margin:14px 3px 7px}
+.crow{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
 .crow::-webkit-scrollbar{display:none}
-.chip{flex:0 0 auto;min-width:62px;border-radius:11px;padding:8px 9px;text-align:center;
- border:1px solid}
+.chip{flex:0 0 auto;min-width:64px;border-radius:12px;padding:9px;text-align:center;border:1px solid}
 .chip b{display:block;font-size:14px;font-weight:700;line-height:1.15}
-.chip s{display:block;font-size:10.5px;text-decoration:none;margin-top:2px;opacity:.85}
-.foot{margin-top:15px;font-size:10px;color:var(--faint);line-height:1.75;text-align:center}
-.err{padding:26px;text-align:center;color:var(--warn);font-size:13px}
+.chip s{display:block;font-size:10.5px;text-decoration:none;margin-top:3px;opacity:.9}
+.foot{margin-top:14px;font-size:9.5px;color:var(--ft);line-height:1.85;text-align:center}
+.err{padding:26px;text-align:center;color:var(--wr);font-size:13px}
 </style></head><body>
 
 <div class="hd">
@@ -436,8 +518,11 @@ body{margin:0;background:var(--bg);color:var(--tx);
   <a class="tab on" href="/?u=__U__&n=__N__&r=__R__">__U__</a>
   <a class="tab" href="/?u=__OTHER__&n=__N__&r=__R__">__OTHER__</a>
  </div>
- <div class="px"><b id="spot">—</b><s><span class="dot"></span><span id="ts">…</span></s></div>
+ <div class="px"><b id="spot">—</b>
+  <div class="sub"><span id="ses" class="bdg">…</span> <span id="ts">…</span></div></div>
 </div>
+
+<div class="exp"><span>سلسلة العقود</span><b id="exp">…</b></div>
 
 <div class="stats">
  <div class="st"><u>كول</u><b id="cv" style="color:var(--up)">—</b></div>
@@ -446,28 +531,27 @@ body{margin:0;background:var(--bg);color:var(--tx);
 </div>
 
 <div class="tbl">
- <div class="hdr"><span>سترايك</span><span>الحجم اليومي</span><span>OI</span><span>سعر</span><span>5د</span></div>
+ <div class="hdr"><span>سترايك</span><span>الحجم اليومي</span><span>كول / بوت</span><span>OI · 5د</span></div>
  <div id="body"><div class="err">جارٍ التحميل…</div></div>
 </div>
 
-<div class="chips">
- <div class="ctitle">أكبر التجمّعات — من الأكبر إلى الأصغر</div>
- <div class="crow" id="chips"></div>
-</div>
+<div class="ctitle">أكبر التجمّعات — من الأكبر إلى الأصغر</div>
+<div class="crow" id="chips"></div>
 
 <div class="foot">
- الشريط والرقم = حجم تداول اليوم للجانب المهيمن · OI = عقود مفتوحة من إغلاق الأمس<br>
- <span style="color:var(--warn)">◆</span> إطار ذهبي = أعلى OI في النطاق ·
- 5د = نمو الحجم في آخر خمس دقائق<br>
- قراءة فقط · لا صلة بالبوت
+الشريط = حجم اليوم للجانب المهيمن · <span style="color:var(--wr)">◆</span> أعلى OI في النطاق<br>
+5د = نمو الحجم في آخر خمس دقائق · يُحسب في جهازك<br>
+قراءة فقط · لا صلة بالبوت
 </div>
 
 <script>
 const U="__U__",N=__N__,R=__R__;
 const HK="liq_hist_"+U, WIN=300000, KEEP=1800000;
+const K=v=>v==null?"—":(v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":String(v));
+const P=v=>v==null?"—":Number(v).toFixed(2);
 function hist(){try{return JSON.parse(localStorage.getItem(HK))||[]}catch(e){return[]}}
 function push(snap){
- let h=hist(), now=Date.now();
+ let h=hist(),now=Date.now();
  if(!h.length||now-h[h.length-1].t>25000)h.push({t:now,s:snap});
  h=h.filter(x=>now-x.t<KEEP);
  try{localStorage.setItem(HK,JSON.stringify(h))}catch(e){}
@@ -475,54 +559,57 @@ function push(snap){
  for(const x of h){if(now-x.t>=WIN)ref=x.s;else break;}
  return ref;
 }
-const K=v=>v==null?"—":(v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":String(v));
-const P=v=>v==null?"—":Number(v).toFixed(2);
+const SES={open:["var(--up)","rgba(45,212,160,.16)"],
+           pre:["var(--wr)","rgba(255,181,71,.16)"],
+           post:["var(--ac)","rgba(74,144,255,.16)"],
+           closed:["#8c96ab","rgba(255,255,255,.09)"]};
 async function load(){
+ const B=document.getElementById("body");
  try{
   const d=await (await fetch(`/json?u=${U}&n=${N}`)).json();
-  const B=document.getElementById("body");
   if(!d.ok){B.innerHTML=`<div class="err">⚠ ${d.err||"تعذّر الجلب"}</div>`;return;}
   document.getElementById("spot").textContent=Number(d.spot).toFixed(2);
-  document.getElementById("ts").textContent=d.ts;
+  document.getElementById("ts").textContent=d.ny_time+" نيويورك";
+  const sb=document.getElementById("ses"),sc=SES[d.session]||SES.closed;
+  sb.textContent=d.session_txt;sb.style.color=sc[0];sb.style.background=sc[1];
+  document.getElementById("exp").textContent=`ينتهي ${d.exp_disp} · ${d.exp_tag}`;
   document.getElementById("cv").textContent=K(d.call_vol_total);
   document.getElementById("pv").textContent=K(d.put_vol_total);
   const pc=document.getElementById("pc");
   pc.textContent=d.pc_ratio??"—";
-  pc.style.color=d.pc_ratio==null?"var(--tx)":(d.pc_ratio>1.15?"var(--dn)":(d.pc_ratio<0.85?"var(--up)":"var(--tx)"));
+  pc.style.color=d.pc_ratio==null?"var(--tx)":(d.pc_ratio>1.15?"var(--dn)":(d.pc_ratio<.85?"var(--up)":"var(--tx)"));
   const ref=push(Object.fromEntries(d.table.map(t=>[t.side+t.strike,t.main_vol])));
-  for(const t of d.table){
-   const pv=ref?ref[t.side+t.strike]:null;
-   t.delta_pct=(pv&&pv>0)?Math.round((t.main_vol-pv)/pv*1000)/10:null;
-  }
+  for(const t of d.table){const pv=ref?ref[t.side+t.strike]:null;
+   t.dp=(pv&&pv>0)?Math.round((t.main_vol-pv)/pv*1000)/10:null;}
   const mx=Math.max(...d.table.map(t=>t.main_vol),1);
-  const pinK=d.pin?d.pin.strike:null;
+  const pk=d.pin?d.pin.strike:null;
   let h="",placed=false;
   for(const t of d.table){
    if(!placed&&t.side==="below"){
-    h+=`<div class="spot">${U} ${Number(d.spot).toFixed(2)}</div>`;placed=true;}
+    h+=`<div class="spot${d.session==="open"?"":" dim"}">${U} ${Number(d.spot).toFixed(2)}</div>`;
+    placed=true;}
    const up=t.side==="above",c=up?"#2dd4a0":"#ff5c72";
    const w=Math.max(9,Math.round(100*t.main_vol/mx));
-   const hot=t.delta_pct!=null&&t.delta_pct>=8;
-   const dtx=t.delta_pct==null?"—":(t.delta_pct>0?"+":"")+t.delta_pct+"%";
-   h+=`<div class="rw${t.strike===pinK?" pin":""}">
+   const hot=t.dp!=null&&t.dp>=8;
+   const dt=t.dp==null?"—":(t.dp>0?"+":"")+t.dp+"%";
+   h+=`<div class="rw${t.strike===pk?" pin":""}">
     <span class="sk" style="color:${c}">${t.strike}</span>
-    <span class="bw"><span class="bf" style="width:${w}%;background:${c}30"></span>
-      <span class="bv" style="color:${c}">${K(t.main_vol)}</span></span>
-    <span class="oi${t.strike===pinK?" big":""}">${K(t.main_oi)}</span>
-    <span class="pr" style="color:${c}">${P(t.main_mid)}</span>
-    <span class="dl${hot?" hot":""}">${dtx}</span></div>`;
+    <span class="bw"><span class="bf" style="width:${w}%;background:${c}2e"></span>
+     <span class="bv" style="color:${c}">${K(t.main_vol)}</span></span>
+    <span class="pp"><i style="color:#2dd4a0">${P(t.call_mid)}</i>
+     <i style="color:#ff5c72">${P(t.put_mid)}</i></span>
+    <span class="rt"><i class="${t.strike===pk?"big":""}">${K(t.main_oi)}</i>
+     <i class="${hot?"hot":""}">${dt}</i></span></div>`;
   }
-  if(!placed)h+=`<div class="spot">${U} ${Number(d.spot).toFixed(2)}</div>`;
+  if(!placed)h+=`<div class="spot dim">${U} ${Number(d.spot).toFixed(2)}</div>`;
   B.innerHTML=h;
   document.getElementById("chips").innerHTML=d.clusters.map(c=>{
-    const up=c.side==="above";
-    const col=up?"#2dd4a0":"#ff5c72";
-    const bg=up?"rgba(45,212,160,.13)":"rgba(255,92,114,.13)";
-    return `<div class="chip" style="background:${bg};border-color:${col}55">
-      <b style="color:${col}">${c.strike}</b><s style="color:${col}">${K(c.vol)}</s></div>`;
+   const up=c.side==="above",col=up?"#2dd4a0":"#ff5c72";
+   const bg=up?"rgba(45,212,160,.13)":"rgba(255,92,114,.13)";
+   return `<div class="chip" style="background:${bg};border-color:${col}55">
+    <b style="color:${col}">${c.strike}</b><s style="color:${col}">${K(c.vol)}</s></div>`;
   }).join("");
- }catch(e){
-  document.getElementById("body").innerHTML=`<div class="err">⚠ ${e}</div>`;}
+ }catch(e){B.innerHTML=`<div class="err">⚠ ${e}</div>`;}
 }
 load();setInterval(load,R*1000);
 </script></body></html>"""
