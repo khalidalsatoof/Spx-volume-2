@@ -340,14 +340,32 @@ def dbg(u: str = "SPY"):
     return JSONResponse(debug(u))
 
 
-@app.get("/", response_class=HTMLResponse)
-def dash(u: str = "SPY", n: int = 0, r: int = 20):
+def _page(u, n, r):
     u = u.upper() if u.upper() in UNDERLYINGS else "SPY"
     other = "SPX" if u == "SPY" else "SPY"
     n = n or LIQ_STRIKES
     r = max(5, min(r, 300))
     return (PAGE.replace("__U__", u).replace("__OTHER__", other)
                 .replace("__N__", str(n)).replace("__R__", str(r)))
+
+
+@app.get("/", response_class=HTMLResponse)
+def dash(u: str = "SPY", n: int = 0, r: int = 20):
+    return _page(u, n, r)
+
+
+# مسار احتياطي: بعض إعدادات فيرسل تمرّر المسار الكامل للدالة.
+# يلتقط أي مسار غير معروف ويوجّهه بحسب نهايته — يجب أن يبقى الأخير.
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 20):
+    p = "/" + (full_path or "").strip("/")
+    if p.endswith("/health"):
+        return JSONResponse(health())
+    if p.endswith("/debug"):
+        return JSONResponse(debug(u))
+    if p.endswith("/json"):
+        return JSONResponse(fetch(u, n=n or None, force=True))
+    return _page(u, n, r)
 
 
 PAGE = """<!doctype html><html lang="ar" dir="rtl"><head>
