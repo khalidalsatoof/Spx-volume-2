@@ -55,7 +55,7 @@ TD_BASE    = "https://api.tradier.com/v1"
 TD_TOKEN   = os.getenv("TRADIER_PROD_TOKEN", "").strip()
 TD_TIMEOUT = float(os.getenv("TD_TIMEOUT", "8"))
 
-LIQ_STRIKES = int(os.getenv("LIQ_STRIKES", "8"))      # عدد السترايكات فوق وتحت
+LIQ_STRIKES = int(os.getenv("LIQ_STRIKES", "10"))      # عدد السترايكات فوق وتحت
 LIQ_CACHE_SEC = float(os.getenv("LIQ_CACHE_SEC", "10"))
 
 # الرمز الأساسي ← (رمز الاستعلام, رمز التسعير)
@@ -418,9 +418,13 @@ def dbg(u: str = "SPY"):
 def _page(u, n, r):
     u = u.upper() if u.upper() in UNDERLYINGS else "SPY"
     other = "SPX" if u == "SPY" else "SPY"
-    n = n or LIQ_STRIKES
+    n = max(3, min(n or LIQ_STRIKES, 20))
     r = max(5, min(r, 300))
+    picks = "".join(
+        f'<a class="np{" on" if x == n else ""}" href="/?u={u}&n={x}&r={r}">{x}</a>'
+        for x in (5, 8, 10, 12, 15))
     return (PAGE.replace("__U__", u).replace("__OTHER__", other)
+                .replace("__PICKS__", picks)
                 .replace("__N__", str(n)).replace("__R__", str(r)))
 
 
@@ -476,6 +480,11 @@ body{margin:0;background:var(--bg);color:var(--tx);
  padding:8px 11px;margin-bottom:10px;font-size:11.5px;color:var(--dim);
  display:flex;justify-content:space-between;align-items:center;gap:8px}
 .exp b{color:var(--tx);font-weight:600}
+.picks{display:flex;align-items:center;gap:5px;margin-bottom:11px;font-size:10.5px;color:var(--dim)}
+.picks span{margin-inline-end:3px}
+.np{flex:1;text-align:center;padding:7px 0;border-radius:9px;text-decoration:none;
+ background:var(--c1);border:1px solid var(--ln);color:var(--dim);font-size:12.5px;font-weight:600}
+.np.on{background:var(--ac);color:#fff;border-color:var(--ac)}
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:11px}
 .st{background:var(--c1);border:1px solid var(--ln);border-radius:12px;padding:9px 4px;text-align:center}
 .st u{display:block;font-size:9.5px;color:var(--dim);text-decoration:none;margin-bottom:4px}
@@ -523,6 +532,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
 </div>
 
 <div class="exp"><span>سلسلة العقود</span><b id="exp">…</b></div>
+<div class="picks"><span>سترايكات</span>__PICKS__</div>
 
 <div class="stats">
  <div class="st"><u>كول</u><b id="cv" style="color:var(--up)">—</b></div>
