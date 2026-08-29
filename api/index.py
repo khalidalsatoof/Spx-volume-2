@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.2)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
-  ── الجديد في v1.1 ──
+  ── الجديد في v1.2 ──
+  ⑦ /snap — لقطة مفردة للتسجيل (JSON أو نص) · اتجاه واحد · بلا حفظ
+  ⑧ VIX0D بجانب VIX · رمز قابل للضبط عبر VIX1D_SYMBOL
+  ⑨ نسبة كول/بوت تُعرض رمادية باهتة إذا كان أضعف الجانبين < CP_MIN_SIDE
+
+  ── v1.1 ──
   ① دورة موحّدة كل 5 ثوانٍ (كان 20) · إيقاف تلقائي عند إخفاء الصفحة
   ② شريط الجدران العلوي — OI فقط · نطاق ثابت ±0.5% من السعر
      ⇒ لا يختفي الجدار عند تقليص عدد السترايكات المعروضة
@@ -46,6 +51,8 @@
   /?u=SPX           تبديل الأداة
   /?u=SPY&n=8&r=5   عدد السترايكات ومدة التحديث بالثواني
   /json             البيانات خاماً
+  /snap?u=SPX       لقطة سيولة واحدة للتسجيل — نقطة الاتصال الوحيدة بالبوت
+  /snap?u=SPX&fmt=txt   نفس اللقطة كنص عربي جاهز للنسخ
   /debug            حقول Tradier كما ترجع — للتحقق من أسماء الحقول
   /health           فحص سريع
 ═══════════════════════════════════════════════════════════════════════════════
@@ -87,10 +94,17 @@ UNDERLYINGS = {
 }
 
 VIX_SYMBOL = os.getenv("VIX_SYMBOL", "VIX")
+# VIX0D — تقلّب يوم واحد. اسم الرمز عند Tradier قد يختلف عن TradingView.
+# جرّب VIX0D · VIX1D · $VIX0D عبر متغيّر البيئة، وراجع /health بعد النشر.
+VIX1D_SYMBOL = os.getenv("VIX1D_SYMBOL", "VIX0D")
+
+# دون هذا العدد من العقود على أضعف الجانبين تُعدّ نسبة كول/بوت بلا مضمون
+CP_MIN_SIDE = int(os.getenv("CP_MIN_SIDE", "1000"))
 
 _CACHE = {}
 _EXPS = {}          # {underlying: (ts, [تواريخ])}
 _VIX = {"ts": 0.0, "val": None}
+_VIX1D = {"ts": 0.0, "val": None}
 VIX_CACHE_SEC = 20.0
 CUTOFF_NY = (16, 15)   # بعده تُعرض سلسلة الانتهاء التالي
 _HIST = {}          # {underlying: [(ts, {(strike,side): vol})]}
@@ -151,21 +165,29 @@ def _spot(sym):
     return None, "لا سعر في الرد", None, None
 
 
-def _vix():
-    """قيمة VIX — مع cache قصير. يفشل بصمت ولا يعطّل اللوحة."""
+def _quote_last(sym, store):
+    """آخر سعر لرمز مؤشر — مع cache قصير. يفشل بصمت ولا يعطّل اللوحة."""
     now = datetime.now().timestamp()
-    if _VIX["val"] is not None and (now - _VIX["ts"]) < VIX_CACHE_SEC:
-        return _VIX["val"]
-    js, err = _get("/markets/quotes", {"symbols": VIX_SYMBOL, "greeks": "false"})
+    if store["val"] is not None and (now - store["ts"]) < VIX_CACHE_SEC:
+        return store["val"]
+    js, err = _get("/markets/quotes", {"symbols": sym, "greeks": "false"})
     if err or not isinstance(js, dict):
-        return _VIX["val"]
+        return store["val"]
     for q in _listify(js.get("quotes"), "quote"):
         for k in ("last", "close", "prevclose"):
             v = _f(q.get(k))
             if v > 0:
-                _VIX["ts"], _VIX["val"] = now, round(v, 2)
-                return _VIX["val"]
-    return _VIX["val"]
+                store["ts"], store["val"] = now, round(v, 2)
+                return store["val"]
+    return store["val"]
+
+
+def _vix():
+    return _quote_last(VIX_SYMBOL, _VIX)
+
+
+def _vix1d():
+    return _quote_last(VIX1D_SYMBOL, _VIX1D)
 
 
 def _spot_by_parity(rows):
@@ -351,6 +373,8 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
             # نسبة الجانبين عند نفس السترايك — مرشّح ضوضاء لا مؤشر اتجاه:
             # القريب من 1 يعني تحوّطاً أو سبريداً ⇒ لا معلومة اتجاهية
             "cp_ratio": (round(cv / pv, 2) if pv else None),
+            # النسبة بلا مضمون إذا كان أضعف الجانبين صغيراً ⇒ تُعرض رمادية
+            "cp_weak": (min(cv, pv) < CP_MIN_SIDE),
         })
 
     # الجانب المهيمن عند كل سترايك: الكول فوق السعر والبوت تحته
@@ -422,7 +446,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         "day_open": round(day_open, 2) if day_open else None,
         "prev_close": round(prev_close, 2) if prev_close else None,
         "chg_pct": chg_pct,
-        "vix": _vix(),
+        "vix": _vix(), "vix1d": _vix1d(),
         "ts": datetime.now().strftime("%H:%M:%S"),
         "table": table,
         "wall_up": wall_up, "wall_dn": wall_dn,
@@ -444,35 +468,94 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
     return data
 
 
-def snapshot_row(underlying="SPY", tag="", trade_key=""):
-    """صف مضغوط للتسجيل في قاعدة البيانات."""
-    d = fetch(underlying)
+def snapshot_row(underlying="SPX", tag="", sig_key="", n=30):
+    """لقطة سيولة مضغوطة للتسجيل — تُستدعى من البوت عبر /snap.
+
+       ⚠ لا تحفظ شيئاً: دوال Vercel بلا حالة. الحفظ مسؤولية المُستدعي.
+       ⚠ السيولة تُقرأ من SPX (أضخم وأوضح)، ويُحفظ سعر SPY في نفس الصف
+         لأن صفقاتنا بوحدات SPY والنسبة تنزاح مع الأرباح الموزّعة."""
+    d = fetch(underlying, n=n, force=True)
     if not d.get("ok"):
-        return None
-    wu, wd = d.get("wall_up"), d.get("wall_dn")
+        return {"ok": False, "err": d.get("err", "تعذّر الجلب"),
+                "ts_ny": datetime.now(NY).strftime("%Y-%m-%d %H:%M:%S"),
+                "sig_key": sig_key, "tag": tag}
+
     ou = (d.get("oi_up") or [None])[0]
     od = (d.get("oi_dn") or [None])[0]
+    spot = d["spot"]
+
+    # النسبة عند أقرب سترايك للسعر
+    atm = min(d["table"], key=lambda t: abs(t["dist"])) if d["table"] else None
+
+    # السعر المقابل للأداة الأخرى — للتحويل بين SPX وSPY لاحقاً
+    other = "SPY" if underlying == "SPX" else "SPX"
+    o_spot, _src, _op, _pc = _spot(UNDERLYINGS[other][1])
+    ratio = round(spot / o_spot, 4) if o_spot else None
+
     return {
-        "ts_ny": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "underlying": underlying, "tag": tag, "trade_key": trade_key,
-        "spot": d["spot"], "vix": d.get("vix"),
-        "wall_up_strike": wu["strike"] if wu else None,
-        "wall_up_vol": wu["main_vol"] if wu else None,
-        "wall_up_dist": wu["dist"] if wu else None,
-        "wall_dn_strike": wd["strike"] if wd else None,
-        "wall_dn_vol": wd["main_vol"] if wd else None,
-        "wall_dn_dist": wd["dist"] if wd else None,
+        "ok": True,
+        "ts_ny": datetime.now(NY).strftime("%Y-%m-%d %H:%M:%S"),
+        "sig_key": sig_key, "tag": tag,
+        "underlying": underlying, "expiration": d["expiration"],
+        "session": d["session"],
+        # ── البيئة ──
+        "spot": spot,
+        "spot_other": round(o_spot, 2) if o_spot else None,
+        "other_symbol": other,
+        "px_ratio": ratio,
+        "day_open": d.get("day_open"), "chg_pct": d.get("chg_pct"),
+        "vix": d.get("vix"), "vix1d": d.get("vix1d"),
+        # ── الجدران (OI · نطاق ثابت ±WALL_RANGE_PCT) ──
         "oi_up_strike": ou["strike"] if ou else None,
         "oi_up_oi": ou["oi"] if ou else None,
         "oi_up_dist": ou["dist"] if ou else None,
+        "oi_up_in_target": ou["in_target"] if ou else None,
         "oi_dn_strike": od["strike"] if od else None,
         "oi_dn_oi": od["oi"] if od else None,
         "oi_dn_dist": od["dist"] if od else None,
+        "oi_dn_in_target": od["in_target"] if od else None,
+        "wall_span": d.get("wall_span"),
+        # ── التدفّق ──
         "vol_above": d["vol_above"], "vol_below": d["vol_below"],
-        "ratio_up_dn": d["ratio_up_dn"], "total_vol": d["total_vol"],
-        "table_json": str([[t["strike"], t["call_vol"], t["put_vol"],
-                            t["call_oi"], t["put_oi"]] for t in d["table"]]),
+        "ratio_up_dn": d["ratio_up_dn"],
+        "call_vol_total": d["call_vol_total"], "put_vol_total": d["put_vol_total"],
+        "pc_ratio": d["pc_ratio"],
+        "atm_strike": atm["strike"] if atm else None,
+        "atm_cp_ratio": atm["cp_ratio"] if atm else None,
+        "atm_cp_weak": atm["cp_weak"] if atm else None,
+        # ── الخام: يسمح بإعادة الحساب بأي تعريف لاحق بلا جمع جديد ──
+        "cols": "strike,call_vol,put_vol,call_oi,put_oi",
+        "table_json": [[t["strike"], t["call_vol"], t["put_vol"],
+                        t["call_oi"], t["put_oi"]] for t in d["table"]],
     }
+
+
+def snap_text(row):
+    """صياغة نصية مختصرة للصق في تيليجرام أو Excel."""
+    if not row.get("ok"):
+        return "⚠ تعذّر جلب السيولة: " + str(row.get("err"))
+    L = []
+    v = f"VIX {row['vix']}" if row.get("vix") else "VIX —"
+    if row.get("vix1d"):
+        v += f" · 0D {row['vix1d']}"
+    L.append(f"📊 سيولة {row['underlying']} {row['spot']} · {v}")
+    if row.get("spot_other"):
+        L.append(f"{row['other_symbol']} {row['spot_other']} · النسبة {row['px_ratio']}")
+    if row.get("oi_up_strike"):
+        m = " ⚠ في مسار الهدف" if row.get("oi_up_in_target") else ""
+        L.append(f"▲ {row['oi_up_strike']} · OI {row['oi_up_oi']} · "
+                 f"{row['oi_up_dist']:+g}{m}")
+    if row.get("oi_dn_strike"):
+        m = " ⚠ في مسار الهدف" if row.get("oi_dn_in_target") else ""
+        L.append(f"▼ {row['oi_dn_strike']} · OI {row['oi_dn_oi']} · "
+                 f"{row['oi_dn_dist']:+g}{m}")
+    L.append(f"تدفّق: فوق {row['vol_above']} · تحت {row['vol_below']} "
+             f"· بوت/كول {row['pc_ratio']}")
+    if row.get("atm_strike"):
+        w = " (ضعيف)" if row.get("atm_cp_weak") else ""
+        L.append(f"ATM {row['atm_strike']} · كول/بوت {row['atm_cp_ratio']}{w}")
+    L.append(f"🕐 {row['ts_ny']} NY")
+    return "\n".join(L)
 
 
 def debug(underlying="SPY"):
@@ -489,7 +572,7 @@ def debug(underlying="SPY"):
     return {"ok": True, "count": len(raw), "expiration": exp,
             "ny_now": datetime.now(NY).strftime("%Y-%m-%d %H:%M"),
             "expirations": _expirations(q_sym)[:6],
-            "vix": _vix(),
+            "vix": _vix(), "vix1d": _vix1d(),
             "fields": sorted(raw[0].keys()), "sample": raw[0]}
 
 
@@ -508,7 +591,9 @@ def health():
             "delta_window": DELTA_WINDOW,
             "wall_range_pct": WALL_RANGE_PCT,
             "target_band_pct": [TARGET_LO_PCT, TARGET_HI_PCT],
-            "vix": _vix(),
+            "vix": _vix(), "vix1d": _vix1d(),
+            "vix_symbol": VIX_SYMBOL, "vix1d_symbol": VIX1D_SYMBOL,
+            "cp_min_side": CP_MIN_SIDE,
             "ny_now": datetime.now(NY).strftime("%Y-%m-%d %H:%M"),
             "spy_exp": pick_expiration("SPY"), "spx_exp": pick_expiration("SPX"),
             "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -522,6 +607,23 @@ def as_json(u: str = "SPY", n: int = 0, exp: str = ""):
 @app.get("/debug")
 def dbg(u: str = "SPY"):
     return JSONResponse(debug(u))
+
+
+@app.get("/snap")
+def snap(u: str = "SPX", n: int = 30, key: str = "", tag: str = "",
+         fmt: str = "json"):
+    """لقطة سيولة واحدة — نقطة الاتصال الوحيدة مع البوت.
+
+       اتجاه واحد: البوت يستدعي ويقرأ. اللوحة لا تعرف بوجود البوت.
+       /snap?u=SPX                          → JSON
+       /snap?u=SPX&fmt=txt                  → نص عربي جاهز للنسخ
+       /snap?u=SPX&key=2026-08-31_10:05_PUT_771&tag=executed
+    """
+    row = snapshot_row(u, tag=tag, sig_key=key, n=max(5, min(n, 40)))
+    if fmt == "txt":
+        return HTMLResponse("<pre style='font:14px/1.7 monospace;direction:rtl'>"
+                            + snap_text(row) + "</pre>")
+    return JSONResponse(row)
 
 
 def _page(u, n, r):
@@ -553,6 +655,8 @@ def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 5):
         return JSONResponse(debug(u))
     if p.endswith("/json"):
         return JSONResponse(fetch(u, n=n or None, force=True))
+    if p.endswith("/snap"):
+        return JSONResponse(snapshot_row(u if u != "SPY" else "SPX"))
     return _page(u, n, r)
 
 
@@ -740,7 +844,9 @@ async function load(){
    cg.style.color="var(--dim)";
    cg.textContent=(d.chg_pct==null)?"":((d.chg_pct>0?"+":"")+d.chg_pct+"%");
   }
-  document.getElementById("vix").textContent=d.vix?("VIX "+d.vix):"";
+  let vtx=d.vix?("VIX "+d.vix):"";
+  if(d.vix1d)vtx+=(vtx?" · ":"")+"0D "+d.vix1d;
+  document.getElementById("vix").textContent=vtx;
   document.getElementById("ts").textContent=d.ny_time+" نيويورك";
   const sb=document.getElementById("ses"),sc=SES[d.session]||SES.closed;
   sb.textContent=d.session_txt;sb.style.color=sc[0];sb.style.background=sc[1];
@@ -771,7 +877,10 @@ async function load(){
    const dt=t.dp==null?"—":(t.dp>0?"+":"")+t.dp+"%";
    // نسبة كول/بوت: القريب من 1 يعني توازناً ⇒ تحوّط لا رأي اتجاهي
    const cr=t.cp_ratio;
-   const crc=(cr==null)?"var(--dim)":(cr>=1.6?"#2dd4a0":(cr<=0.62?"#ff5c72":"var(--dim)"));
+   // جانب ضعيف ⇒ النسبة بلا مضمون ⇒ رمادي باهت مهما بلغت قيمتها
+   const crc=(cr==null)?"var(--dim)":(t.cp_weak?"#4e5c74":
+    (cr>=1.6?"#2dd4a0":(cr<=0.62?"#ff5c72":"var(--dim)")));
+   const cro=t.cp_weak?";opacity:.45":"";
    h+=`<div class="rw${t.strike===pk?" pin":""}">
     <span class="sk" style="color:${c}">${t.strike}</span>
     <span class="bw2">
@@ -780,7 +889,7 @@ async function load(){
      <span class="bw"><span class="bf" style="width:${wp}%;background:#ff5c722e"></span>
       <span class="bv" style="color:#ff5c72">${K(t.put_vol)}</span></span>
     </span>
-    <span class="cp" style="color:${crc}">${cr==null?"—":cr}</span>
+    <span class="cp" style="color:${crc}${cro}">${cr==null?"—":cr}</span>
     <span class="pp"><i style="color:#2dd4a0">${P(t.call_mid)}</i>
      <i style="color:#ff5c72">${P(t.put_mid)}</i></span>
     <span class="rt"><i class="${t.strike===pk?"big":""}">${K(t.main_oi)}</i>
