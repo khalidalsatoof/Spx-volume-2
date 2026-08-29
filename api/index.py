@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.2)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.2.1)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.2 ──
   ⑦ /snap — لقطة مفردة للتسجيل (JSON أو نص) · اتجاه واحد · بلا حفظ
-  ⑧ VIX0D بجانب VIX · رمز قابل للضبط عبر VIX1D_SYMBOL
+  ⑧ VIX وVIX0D في سطر مستقل تحت الحالة (لا يُقصّ مهما طال) · VIX1D_SYMBOL
   ⑨ نسبة كول/بوت تُعرض رمادية باهتة إذا كان أضعف الجانبين < CP_MIN_SIDE
 
   ── v1.1 ──
@@ -688,7 +688,8 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .px b{font-size:27px;font-weight:700;letter-spacing:-.5px;display:block}
 .px .chg{font-size:12px;font-weight:700;margin-top:3px;display:block}
 .px .sub{font-size:10.5px;color:var(--dim);margin-top:4px;white-space:nowrap}
-.px .vix{font-size:10px;color:var(--dim);margin-inline-start:5px}
+.px .vix{display:block;font-size:10px;color:var(--dim);margin-top:2px;
+ white-space:nowrap;line-height:1.3}
 .bdg{display:inline-block;padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;
  margin-inline-start:5px;vertical-align:1px}
 .exp{background:var(--c1);border:1px solid var(--ln);border-radius:11px;
@@ -761,8 +762,8 @@ body{margin:0;background:var(--bg);color:var(--tx);
  </div>
  <div class="px"><b id="spot">—</b>
   <span class="chg" id="chg"></span>
-  <div class="sub"><span id="ses" class="bdg">…</span> <span id="ts">…</span>
-   <span class="vix" id="vix"></span></div></div>
+  <div class="sub"><span id="ses" class="bdg">…</span> <span id="ts">…</span></div>
+  <span class="vix" id="vix"></span></div>
 </div>
 
 <div class="exp"><span>سلسلة العقود</span><b id="exp">…</b></div>
