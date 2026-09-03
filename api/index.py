@@ -1,12 +1,21 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.3)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.3.1)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
-  ── الجديد في v1.3 ──
+  ── الجديد في v1.3.1 ──
+  ⑯ عمود «الحجم ÷ OI» لكل سترايك — يفصل التموضع الجديد عن المخزون القائم
+     مثال حي (28 أغسطس): 7730 حجم 14k وOI 687 ⇒ 20.4× (نشاط جديد · ليس جداراً)
+                          7700 حجم 12k وOI 8.0k ⇒ 1.5×  (مخزون قائم · جدار حقيقي)
+     الشريط يعرضهما متقاربين وهما نقيضان ⇒ النسبة هي ما يفصلهما.
+     ⚠ لا يحمل اتجاهاً — يحمل **جودة** التجمّع. ولا يميّز الشراء من البيع.
+     ⚠ الفصل النهائي بين فتح مركز وإغلاقه لا يُعرف إلا بعد تحديث OI (بعد الإغلاق).
+  ⑰ قائمة التجمّعات إلى ثمانية (كانت ستة) + عمود الحجم/OI فيها
+
+  ── v1.3 ──
   ⑩ قائمة التجمّعات المدمجة: كول وبوت في قائمة واحدة مرتّبة بالحجم
      مع البُعد بالنقاط والنمو — تحلّ محل الشريط الأفقي القديم
   ⑪ «تركّز ▲ 62% · 1.8×» في الرأس — وصف تركّز النشاط لا رأي اتجاهي
@@ -404,6 +413,9 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         t["main_spread"] = t["call_spread"] if up else t["put_spread"]
         t["spread_pct"] = (round(t["main_spread"] / t["main_mid"] * 100, 1)
                            if t["main_spread"] and t["main_mid"] else None)
+        # [v1.3.1] الحجم ÷ OI للجانب المهيمن — تموضع جديد مقابل مخزون قائم
+        t["vol_oi"] = (round(t["main_vol"] / t["main_oi"], 1)
+                       if t["main_oi"] and t["main_oi"] > 0 else None)
 
     # ── التغيّر خلال DELTA_WINDOW (نسخة الخادم — الاعتماد على نسخة المتصفح) ──
     hist = _HIST.setdefault(underlying, [])
@@ -443,7 +455,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
     wall_dn = max(dn, key=lambda x: x["main_vol"]) if dn else None
     vol_up = sum(t["main_vol"] for t in up)
     vol_dn = sum(t["main_vol"] for t in dn)
-    clusters = sorted(table, key=lambda x: -x["main_vol"])[:6]
+    clusters = sorted(table, key=lambda x: -x["main_vol"])[:8]
     pin = max(table, key=lambda x: x["main_oi"]) if table else None
     call_v = sum(t["call_vol"] for t in table)
     put_v = sum(t["put_vol"] for t in table)
@@ -483,7 +495,8 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         # [v1.3] قائمة مدمجة: كول وبوت معاً مرتّبين بالحجم، مع البُعد والـOI
         "clusters": [{"strike": c["strike"], "vol": c["main_vol"],
                       "side": c["side"], "dist": c["dist"],
-                      "oi": c["main_oi"]} for c in clusters],
+                      "oi": c["main_oi"], "vol_oi": c["vol_oi"]}
+                     for c in clusters],
         "pin": {"strike": pin["strike"], "oi": pin["main_oi"],
                 "side": pin["side"]} if pin else None,
         "call_vol_total": call_v, "put_vol_total": put_v,
@@ -737,7 +750,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
 
 /* القائمة المدمجة لأكبر التجمّعات */
 .cl{background:var(--c1);border:1px solid var(--ln);border-radius:13px;overflow:hidden}
-.clr{display:grid;grid-template-columns:14px 42px 1fr 44px 40px;gap:6px;
+.clr{display:grid;grid-template-columns:12px 40px 1fr 34px 40px 38px;gap:5px;
  align-items:center;padding:6px 9px;border-bottom:1px solid rgba(33,43,60,.5)}
 .clr:last-child{border-bottom:none}
 .clr .dotc{width:8px;height:8px;border-radius:50%}
@@ -753,6 +766,8 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .clr .g{text-align:center;font-size:9.5px;color:var(--dim)}
 .clr .g.hot{color:var(--up);font-weight:700;
  text-shadow:0 0 8px rgba(45,212,160,.55)}
+.clr .v{text-align:center;font-size:9.5px;font-weight:700;color:var(--dim)}
+.clr .v.fresh{color:var(--wr);text-shadow:0 0 8px rgba(255,181,71,.45)}
 .bdg{display:inline-block;padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;
  margin-inline-start:5px;vertical-align:1px}
 .exp{background:var(--c1);border:1px solid var(--ln);border-radius:11px;
@@ -784,9 +799,9 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .witem s.hit{color:var(--dn);opacity:1;font-weight:700}
 
 .tbl{background:var(--c1);border:1px solid var(--ln);border-radius:15px;overflow:hidden}
-.hdr{display:grid;grid-template-columns:38px 1fr 32px 44px 36px;gap:4px;padding:6px 8px;
+.hdr{display:grid;grid-template-columns:36px 1fr 30px 30px 42px 34px;gap:3px;padding:6px 6px;
  font-size:8.5px;color:var(--dim);text-align:center;border-bottom:1px solid var(--ln)}
-.rw{display:grid;grid-template-columns:38px 1fr 32px 44px 36px;gap:4px;padding:4px 8px;
+.rw{display:grid;grid-template-columns:36px 1fr 30px 30px 42px 34px;gap:3px;padding:4px 6px;
  align-items:center;border-bottom:1px solid rgba(33,43,60,.5)}
 .rw:last-child{border-bottom:none}
 .rw.pin{background:rgba(255,181,71,.075)}
@@ -796,6 +811,9 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .bf{position:absolute;inset-inline-start:0;top:0;height:100%;border-radius:3px;transition:width .4s}
 .bv{position:absolute;inset-inline-start:5px;top:0;line-height:11px;font-size:8.5px;font-weight:700}
 .cp{text-align:center;font-size:9.5px;font-weight:700}
+/* الحجم ÷ OI — تموضع جديد مقابل مخزون قائم */
+.vo{text-align:center;font-size:9.5px;font-weight:700;color:var(--dim)}
+.vo.fresh{color:var(--wr)}
 .pp{text-align:center;line-height:1.3;font-size:9.5px;font-weight:600}
 .pp i{font-style:normal;display:block}
 .rt{text-align:center;line-height:1.3;font-size:8.5px;color:var(--dim)}
@@ -852,12 +870,12 @@ body{margin:0;background:var(--bg);color:var(--tx);
 </div>
 
 <div class="tbl">
- <div class="hdr"><span>سترايك</span><span>كول / بوت</span><span>نسبة</span>
+ <div class="hdr"><span>سترايك</span><span>كول / بوت</span><span>نسبة</span><span>ح/OI</span>
   <span>السعر</span><span>OI · 5د</span></div>
  <div id="body"><div class="err">جارٍ التحميل…</div></div>
 </div>
 
-<div class="ctitle">أكبر التجمّعات — كول وبوت معاً · مرتّبة بالحجم</div>
+<div class="ctitle">أكبر ثمانية تجمّعات — كول وبوت معاً · مرتّبة بالحجم</div>
 <div class="cl" id="chips"></div>
 
 <script>
@@ -871,6 +889,8 @@ const STEP=30000;        // لقطة محفوظة كل 30 ثانية (الدور
 const MIN_BASE=6;        // أقل عدد نوافذ قبل عرض المضاعف
 const K=v=>v==null?"—":(v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":String(v));
 const P=v=>v==null?"—":Number(v).toFixed(2);
+// الحجم ÷ OI: ≥3× تموضع جديد غالباً · <1× تداول على مخزون قائم
+const VO=v=>v==null?"—":(v>=100?Math.round(v)+"×":v.toFixed(1)+"×");
 function hist(){try{return JSON.parse(localStorage.getItem(HK))||[]}catch(e){return[]}}
 function median(a){if(!a.length)return null;const b=[...a].sort((x,y)=>x-y);
  const m=b.length>>1;return b.length%2?b[m]:(b[m-1]+b[m])/2;}
@@ -1030,6 +1050,7 @@ async function load(){
       <span class="bv" style="color:#ff5c72">${K(t.put_vol)}</span></span>
     </span>
     <span class="cp" style="color:${crc}${cro}">${cr==null?"—":cr}</span>
+    <span class="vo ${t.vol_oi!=null&&t.vol_oi>=3?"fresh":""}">${VO(t.vol_oi)}</span>
     <span class="pp"><i style="color:#2dd4a0">${P(t.call_mid)}</i>
      <i style="color:#ff5c72">${P(t.put_mid)}</i></span>
     <span class="rt"><i class="${t.strike===pk?"big":""}">${K(t.main_oi)}</i>
@@ -1055,6 +1076,7 @@ async function load(){
     <span class="bar"><i style="width:${w}%;background:${col}33"></i>
      <b style="color:${col}">${K(c.vol)}</b></span>
     <span class="d ${hit?"hit":""}">${c.dist>0?"+":""}${c.dist.toFixed(1)}</span>
+    <span class="v ${c.vol_oi!=null&&c.vol_oi>=3?"fresh":""}">${VO(c.vol_oi)}</span>
     <span class="g ${hot?"hot":""}">${gt}</span></div>`;
   }).join("");
  }catch(e){B.innerHTML=`<div class="err">⚠ ${e}</div>`;}
