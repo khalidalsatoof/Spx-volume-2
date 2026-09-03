@@ -1,12 +1,24 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.2.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.3)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
-  ── الجديد في v1.2 ──
+  ── الجديد في v1.3 ──
+  ⑩ قائمة التجمّعات المدمجة: كول وبوت في قائمة واحدة مرتّبة بالحجم
+     مع البُعد بالنقاط والنمو — تحلّ محل الشريط الأفقي القديم
+  ⑪ «تركّز ▲ 62% · 1.8×» في الرأس — وصف تركّز النشاط لا رأي اتجاهي
+     ⚠ «فوق/تحت» لا «كول/بوت»: التجمّع فوق السعر يُحسب كولاً بحكم التعريف
+  ⑫ المضاعف بوسيط متدحرج (نوافذ خمس دقائق داخل الجلسة) بدل عتبة ثابتة
+     ⇒ 30k صباحاً ليست 30k عصراً · يُخفى قبل 10:00 NY (الأساس شبه صفر)
+  ⑬ نسبة التغيّر من إغلاق الأمس لا من الافتتاح ⇒ الفجوة تُحتسب
+     + شريط نطاق اليوم (أدنى · السعر · أعلى) — قراءة موقع السعر بنظرة
+  ⑭ تاريخ منفصل تماماً لكل أداة + مؤشر جاهزية بدل رقم مضلّل
+  ⑮ cache VIX إلى 60 ثانية · تباطؤ الدورة خارج الجلسة · حذف نص التذييل
+
+  ── v1.2 ──
   ⑦ /snap — لقطة مفردة للتسجيل (JSON أو نص) · اتجاه واحد · بلا حفظ
   ⑧ VIX وVIX0D في سطر مستقل تحت الحالة (لا يُقصّ مهما طال) · VIX1D_SYMBOL
   ⑨ نسبة كول/بوت تُعرض رمادية باهتة إذا كان أضعف الجانبين < CP_MIN_SIDE
@@ -105,7 +117,7 @@ _CACHE = {}
 _EXPS = {}          # {underlying: (ts, [تواريخ])}
 _VIX = {"ts": 0.0, "val": None}
 _VIX1D = {"ts": 0.0, "val": None}
-VIX_CACHE_SEC = 20.0
+VIX_CACHE_SEC = 60.0
 CUTOFF_NY = (16, 15)   # بعده تُعرض سلسلة الانتهاء التالي
 _HIST = {}          # {underlying: [(ts, {(strike,side): vol})]}
 HIST_KEEP_SEC = 1800
@@ -150,19 +162,23 @@ def _listify(node, key):
 
 
 def _spot(sym):
-    """سعر الأداة + سعر الافتتاح + الإغلاق السابق.
+    """سعر الأداة + الافتتاح + إغلاق الأمس + أعلى وأدنى اليوم.
+
+       يرجع (spot, src, open, prev_close, high, low).
        للمؤشرات قد يفشل الاستعلام المباشر ⇒ يرجع None ويُقدَّر لاحقاً."""
     js, err = _get("/markets/quotes", {"symbols": sym, "greeks": "false"})
     if err or not isinstance(js, dict):
-        return None, err or "لا رد", None, None
+        return None, err or "لا رد", None, None, None, None
     for q in _listify(js.get("quotes"), "quote"):
         op = _f(q.get("open")) or None
         pc = _f(q.get("prevclose")) or None
+        hi = _f(q.get("high")) or None
+        lo = _f(q.get("low")) or None
         for k in ("last", "close", "prevclose"):
             v = _f(q.get(k))
             if v > 0:
-                return v, f"tradier:{k}", op, pc
-    return None, "لا سعر في الرد", None, None
+                return v, f"tradier:{k}", op, pc, hi, lo
+    return None, "لا سعر في الرد", None, None, None, None
 
 
 def _quote_last(sym, store):
@@ -340,10 +356,12 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
             "oi": _i(o.get("open_interest")),
         }
 
-    spot, spot_src, day_open, prev_close = _spot(UNDERLYINGS[underlying][1])
+    spot, spot_src, day_open, prev_close, day_high, day_low = _spot(
+        UNDERLYINGS[underlying][1])
     if not spot:
         spot = _spot_by_parity(rows)
         spot_src, day_open, prev_close = "parity", None, None
+        day_high = day_low = None
     if not spot:
         return {"ok": False, "err": "تعذّر تحديد سعر الأداة",
                 "underlying": underlying, "expiration": exp}
@@ -425,16 +443,22 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
     wall_dn = max(dn, key=lambda x: x["main_vol"]) if dn else None
     vol_up = sum(t["main_vol"] for t in up)
     vol_dn = sum(t["main_vol"] for t in dn)
-    clusters = sorted(table, key=lambda x: -x["main_vol"])[:8]
+    clusters = sorted(table, key=lambda x: -x["main_vol"])[:6]
     pin = max(table, key=lambda x: x["main_oi"]) if table else None
     call_v = sum(t["call_vol"] for t in table)
     put_v = sum(t["put_vol"] for t in table)
 
     oi_up, oi_dn, wall_span = _walls(rows, spot)
 
-    ref_price = day_open or prev_close
-    chg_pct = (round((spot - ref_price) / ref_price * 100, 2)
-               if ref_price else None)
+    # [v1.3] التغيّر اليومي يُقاس من **إغلاق الأمس** لا من الافتتاح،
+    #        وإلا اختفت الفجوة من الرقم تماماً. ويُعرض تغيّر الافتتاح بجانبه
+    #        لأنه يجيب سؤالاً مختلفاً: أين السعر من بداية الجلسة؟
+    chg_pct = (round((spot - prev_close) / prev_close * 100, 2)
+               if prev_close else None)
+    chg_open_pct = (round((spot - day_open) / day_open * 100, 2)
+                    if day_open else None)
+    gap_pct = (round((day_open - prev_close) / prev_close * 100, 2)
+               if day_open and prev_close else None)
 
     data = {
         "ok": True, "underlying": underlying, "expiration": exp,
@@ -445,7 +469,9 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         "spot": round(spot, 2), "spot_src": spot_src, "spacing": spacing,
         "day_open": round(day_open, 2) if day_open else None,
         "prev_close": round(prev_close, 2) if prev_close else None,
-        "chg_pct": chg_pct,
+        "chg_pct": chg_pct, "chg_open_pct": chg_open_pct, "gap_pct": gap_pct,
+        "day_high": round(day_high, 2) if day_high else None,
+        "day_low": round(day_low, 2) if day_low else None,
         "vix": _vix(), "vix1d": _vix1d(),
         "ts": datetime.now().strftime("%H:%M:%S"),
         "table": table,
@@ -454,8 +480,10 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         "target_lo_pct": TARGET_LO_PCT, "target_hi_pct": TARGET_HI_PCT,
         "vol_above": vol_up, "vol_below": vol_dn,
         "ratio_up_dn": round(vol_up / vol_dn, 2) if vol_dn else None,
+        # [v1.3] قائمة مدمجة: كول وبوت معاً مرتّبين بالحجم، مع البُعد والـOI
         "clusters": [{"strike": c["strike"], "vol": c["main_vol"],
-                      "side": c["side"]} for c in clusters],
+                      "side": c["side"], "dist": c["dist"],
+                      "oi": c["main_oi"]} for c in clusters],
         "pin": {"strike": pin["strike"], "oi": pin["main_oi"],
                 "side": pin["side"]} if pin else None,
         "call_vol_total": call_v, "put_vol_total": put_v,
@@ -489,7 +517,7 @@ def snapshot_row(underlying="SPX", tag="", sig_key="", n=30):
 
     # السعر المقابل للأداة الأخرى — للتحويل بين SPX وSPY لاحقاً
     other = "SPY" if underlying == "SPX" else "SPX"
-    o_spot, _src, _op, _pc = _spot(UNDERLYINGS[other][1])
+    o_spot, _src, _op, _pc, _hi, _lo = _spot(UNDERLYINGS[other][1])
     ratio = round(spot / o_spot, 4) if o_spot else None
 
     return {
@@ -690,6 +718,41 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .px .sub{font-size:10.5px;color:var(--dim);margin-top:4px;white-space:nowrap}
 .px .vix{display:block;font-size:10px;color:var(--dim);margin-top:2px;
  white-space:nowrap;line-height:1.3}
+.px .conc{display:block;font-size:11px;font-weight:700;margin-top:3px;white-space:nowrap}
+.px .conc s{text-decoration:none;font-weight:600;color:var(--dim);font-size:10px}
+
+/* شريط نطاق اليوم — أدنى · السعر · أعلى */
+.rng{margin:0 0 9px;padding:6px 10px 8px;background:var(--c1);
+ border:1px solid var(--ln);border-radius:11px}
+.rng .lbl{display:flex;justify-content:space-between;font-size:9px;
+ color:var(--dim);margin-bottom:5px}
+.rng .track{position:relative;height:5px;border-radius:3px;
+ background:linear-gradient(90deg,rgba(255,92,114,.35),rgba(255,255,255,.12),
+ rgba(45,212,160,.35))}
+.rng .dot{position:absolute;top:-3px;width:11px;height:11px;border-radius:50%;
+ background:var(--tx);border:2px solid var(--bg);transform:translateX(-50%);
+ transition:inset-inline-start .5s}
+.rng .op{position:absolute;top:-1px;width:2px;height:7px;background:var(--wr);
+ opacity:.8;transform:translateX(-50%)}
+
+/* القائمة المدمجة لأكبر التجمّعات */
+.cl{background:var(--c1);border:1px solid var(--ln);border-radius:13px;overflow:hidden}
+.clr{display:grid;grid-template-columns:14px 42px 1fr 44px 40px;gap:6px;
+ align-items:center;padding:6px 9px;border-bottom:1px solid rgba(33,43,60,.5)}
+.clr:last-child{border-bottom:none}
+.clr .dotc{width:8px;height:8px;border-radius:50%}
+.clr .s{font-weight:700;font-size:12.5px}
+.clr .bar{position:relative;height:13px;background:rgba(255,255,255,.03);
+ border-radius:4px;overflow:hidden}
+.clr .bar i{position:absolute;inset-inline-start:0;top:0;height:100%;
+ border-radius:4px;transition:width .45s}
+.clr .bar b{position:absolute;inset-inline-start:6px;top:0;line-height:13px;
+ font-size:9.5px;font-weight:700}
+.clr .d{text-align:center;font-size:10px;font-weight:600;color:var(--dim)}
+.clr .d.hit{color:var(--dn);font-weight:700}
+.clr .g{text-align:center;font-size:9.5px;color:var(--dim)}
+.clr .g.hot{color:var(--up);font-weight:700;
+ text-shadow:0 0 8px rgba(45,212,160,.55)}
 .bdg{display:inline-block;padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;
  margin-inline-start:5px;vertical-align:1px}
 .exp{background:var(--c1);border:1px solid var(--ln);border-radius:11px;
@@ -763,7 +826,15 @@ body{margin:0;background:var(--bg);color:var(--tx);
  <div class="px"><b id="spot">—</b>
   <span class="chg" id="chg"></span>
   <div class="sub"><span id="ses" class="bdg">…</span> <span id="ts">…</span></div>
-  <span class="vix" id="vix"></span></div>
+  <span class="vix" id="vix"></span>
+  <span class="conc" id="conc"></span></div>
+</div>
+
+<div class="rng" id="rng" style="display:none">
+ <div class="lbl"><span id="rlo">—</span><span id="rmid">نطاق اليوم</span>
+  <span id="rhi">—</span></div>
+ <div class="track"><span class="op" id="rop" style="display:none"></span>
+  <span class="dot" id="rdot"></span></div>
 </div>
 
 <div class="exp"><span>سلسلة العقود</span><b id="exp">…</b></div>
@@ -786,31 +857,51 @@ body{margin:0;background:var(--bg);color:var(--tx);
  <div id="body"><div class="err">جارٍ التحميل…</div></div>
 </div>
 
-<div class="ctitle">أكبر التجمّعات — من الأكبر إلى الأصغر</div>
-<div class="crow" id="chips"></div>
-
-<div class="foot">
-الشريطان = حجم اليوم للكول (أخضر) والبوت (أحمر) · <span style="color:var(--wr)">◆</span> أعلى OI في النطاق<br>
-شريط OI = أعلى ثلاثة مراكز قائمة فوق وتحت · البُعد بالنقاط · أحمر = داخل مسار الهدف<br>
-5د = نمو الحجم في آخر خمس دقائق · يُحسب في جهازك<br>
-قراءة فقط · لا صلة بالبوت
-</div>
+<div class="ctitle">أكبر التجمّعات — كول وبوت معاً · مرتّبة بالحجم</div>
+<div class="cl" id="chips"></div>
 
 <script>
 const U="__U__",N=__N__,R=__R__;
-const HK="liq_hist_"+U, WIN=300000, KEEP=1800000;
+// ⚠ المفتاح يحمل اسم الأداة ⇒ تاريخ SPX منفصل تماماً عن SPY.
+//   عند التبديل يبدأ تاريخ الأداة الجديدة من الصفر — لهذا يوجد مؤشر جاهزية.
+const HK="liq_hist_"+U;
+const WIN=300000;        // نافذة 5 دقائق — بالطابع الزمني لا بعدّ اللقطات
+const KEEP=7200000;      // ساعتان: يكفيان لوسيط متدحرج ذي معنى
+const STEP=30000;        // لقطة محفوظة كل 30 ثانية (الدورة تبقى 5 ثوانٍ)
+const MIN_BASE=6;        // أقل عدد نوافذ قبل عرض المضاعف
 const K=v=>v==null?"—":(v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":String(v));
 const P=v=>v==null?"—":Number(v).toFixed(2);
 function hist(){try{return JSON.parse(localStorage.getItem(HK))||[]}catch(e){return[]}}
-function push(snap){
+function median(a){if(!a.length)return null;const b=[...a].sort((x,y)=>x-y);
+ const m=b.length>>1;return b.length%2?b[m]:(b[m-1]+b[m])/2;}
+/* يحفظ اللقطة ويرجع {ref, mult, ready}
+   ref  = خريطة الأحجام قبل 5 دقائق (لعمود النمو لكل سترايك)
+   mult = نمو آخر 5 دقائق ÷ وسيط النوافذ السابقة داخل الجلسة
+   ⚠ الوسيط المتدحرج بدل عتبة ثابتة: 30k صباحاً ليست 30k عصراً. */
+function push(snap,tot){
  let h=hist(),now=Date.now();
- // الحفظ كل 8 ثوانٍ يكفي لدورة 5 ثوانٍ · النافذة تُحسب بالطابع الزمني لا بالعدّ
- if(!h.length||now-h[h.length-1].t>8000)h.push({t:now,s:snap});
+ if(!h.length||now-h[h.length-1].t>STEP)h.push({t:now,s:snap,v:tot});
  h=h.filter(x=>now-x.t<KEEP);
- try{localStorage.setItem(HK,JSON.stringify(h))}catch(e){}
+ try{localStorage.setItem(HK,JSON.stringify(h))}catch(e){
+   try{localStorage.setItem(HK,JSON.stringify(h.slice(-120)))}catch(e2){}}
  let ref=null;
  for(const x of h){if(now-x.t>=WIN)ref=x.s;else break;}
- return ref;
+ // ── سلسلة نمو النوافذ: لكل لقطة، الفرق عن لقطة أقدم بـ5 دقائق ──
+ const deltas=[];
+ for(let i=0;i<h.length;i++){
+  let j=-1;
+  for(let k=i-1;k>=0;k--){if(h[i].t-h[k].t>=WIN){j=k;break;}}
+  if(j>=0&&h[j].v!=null&&h[i].v!=null){
+   const dv=h[i].v-h[j].v; if(dv>0)deltas.push(dv);
+  }
+ }
+ let mult=null,ready=deltas.length>=MIN_BASE;
+ if(ready){
+  const cur=deltas[deltas.length-1];
+  const base=median(deltas.slice(0,-1));
+  if(base&&base>0)mult=Math.round(cur/base*10)/10;
+ }
+ return {ref:ref,mult:mult,ready:ready,n:deltas.length};
 }
 const SES={open:["var(--up)","rgba(45,212,160,.16)"],
            pre:["var(--wr)","rgba(255,181,71,.16)"],
@@ -834,23 +925,43 @@ async function load(){
   const sp=document.getElementById("spot"),cg=document.getElementById("chg");
   sp.textContent=Number(d.spot).toFixed(2);
   const live=d.session==="open";
-  const ref=d.day_open??d.prev_close;
-  if(live&&ref){
-   const upx=d.spot>=ref;
-   sp.style.color=upx?"var(--up)":"var(--dn)";
+  // [v1.3] التغيّر من إغلاق الأمس ⇒ الفجوة محتسبة. وبجانبه تغيّر الافتتاح.
+  const ch=d.chg_pct;
+  if(ch!=null){
+   const upx=ch>=0;
+   sp.style.color=live?(upx?"var(--up)":"var(--dn)"):"var(--tx)";
    cg.style.color=upx?"var(--up)":"var(--dn)";
-   cg.textContent=(upx?"▲ +":"▼ ")+(d.chg_pct??0)+"%";
-  }else{
-   sp.style.color="var(--tx)";
-   cg.style.color="var(--dim)";
-   cg.textContent=(d.chg_pct==null)?"":((d.chg_pct>0?"+":"")+d.chg_pct+"%");
-  }
+   let t=(upx?"▲ +":"▼ ")+ch+"%";
+   if(d.chg_open_pct!=null)
+    t+=`<s style="color:var(--dim);font-weight:600;font-size:10px;
+        text-decoration:none"> · من الفتح ${d.chg_open_pct>0?"+":""}${d.chg_open_pct}%</s>`;
+   cg.innerHTML=t;
+  }else{sp.style.color="var(--tx)";cg.textContent="";}
+  // ── شريط نطاق اليوم ──
+  const rg=document.getElementById("rng");
+  if(d.day_high&&d.day_low&&d.day_high>d.day_low){
+   rg.style.display="";
+   document.getElementById("rlo").textContent=d.day_low.toFixed(2);
+   document.getElementById("rhi").textContent=d.day_high.toFixed(2);
+   const pos=Math.max(0,Math.min(100,
+     (d.spot-d.day_low)/(d.day_high-d.day_low)*100));
+   document.getElementById("rdot").style.insetInlineStart=pos+"%";
+   document.getElementById("rmid").textContent=
+     "نطاق اليوم "+(d.day_high-d.day_low).toFixed(2)+" · موقع "+pos.toFixed(0)+"%";
+   const op=document.getElementById("rop");
+   if(d.day_open&&d.day_open>=d.day_low&&d.day_open<=d.day_high){
+    op.style.display="";
+    op.style.insetInlineStart=
+      ((d.day_open-d.day_low)/(d.day_high-d.day_low)*100)+"%";
+   }else op.style.display="none";
+  }else rg.style.display="none";
   let vtx=d.vix?("VIX "+d.vix):"";
   if(d.vix1d)vtx+=(vtx?" · ":"")+"0D "+d.vix1d;
   document.getElementById("vix").textContent=vtx;
   document.getElementById("ts").textContent=d.ny_time+" نيويورك";
   const sb=document.getElementById("ses"),sc=SES[d.session]||SES.closed;
   sb.textContent=d.session_txt;sb.style.color=sc[0];sb.style.background=sc[1];
+  pace(d.session);
   document.getElementById("exp").textContent=`ينتهي ${d.exp_disp} · ${d.exp_tag}`;
   document.getElementById("cv").textContent=K(d.call_vol_total);
   document.getElementById("pv").textContent=K(d.put_vol_total);
@@ -860,10 +971,38 @@ async function load(){
   // ── شريط الجدران ──
   walls(document.getElementById("wup"),d.oi_up,"#2dd4a0","▲ OI");
   walls(document.getElementById("wdn"),d.oi_dn,"#ff5c72","▼ OI");
-  // ── نمو 5د ──
-  const rf=push(Object.fromEntries(d.table.map(t=>[t.side+t.strike,t.main_vol])));
+  // ── نمو 5د + المضاعف المتدحرج ──
+  const H=push(Object.fromEntries(d.table.map(t=>[t.side+t.strike,t.main_vol])),
+               d.total_vol);
+  const rf=H.ref;
   for(const t of d.table){const pv=rf?rf[t.side+t.strike]:null;
    t.dp=(pv&&pv>0)?Math.round((t.main_vol-pv)/pv*1000)/10:null;}
+  // ── تركّز النشاط: نسبة حجم أكبر خمسة تجمّعات فوق السعر إلى مجموعها ──
+  // ⚠ «فوق/تحت» لا «كول/بوت»: التجمّع فوق السعر يُحسب كولاً بحكم التعريف
+  //   لا باختيار السوق ⇒ هذا وصف تركّز نشاط، لا رأي اتجاهي.
+  const top5=(d.clusters||[]).slice(0,5);
+  const vu=top5.filter(c=>c.side==="above").reduce((a,c)=>a+c.vol,0);
+  const vd=top5.filter(c=>c.side==="below").reduce((a,c)=>a+c.vol,0);
+  const cel=document.getElementById("conc");
+  const totTop=vu+vd;
+  if(totTop>=50000){
+   const pu=vu/totTop*100;
+   // حدود مؤقتة معايرة على أول 25 لقطة (وسيط ~62%) — تُعاد المعايرة عند 50
+   const strong=pu>=75||pu<=38;
+   const arrow=pu>=50?"▲":"▼", shown=pu>=50?pu:100-pu;
+   const col=pu>=62?"var(--up)":(pu<=50?"var(--dn)":"var(--dim)");
+   let txt=`<span style="color:${col}">${arrow} ${shown.toFixed(0)}%`
+          +(strong?" ⬤":"")+`</span>`;
+   // ⚠ المضاعف يُخفى قبل 10:00 NY: الأساس شبه صفر فيعطي أرقاماً بلا معنى
+   const hh=parseInt((d.ny_time||"00:00").split(":")[0],10);
+   const mm=parseInt((d.ny_time||"00:00").split(":")[1],10);
+   const after10=(hh>10)||(hh===10&&mm>=0);
+   if(H.mult!=null&&after10&&live)
+    txt+=`<s> · ${H.mult}×</s>`;
+   else if(live)
+    txt+=`<s> · —</s>`;
+   cel.innerHTML=txt;
+  }else cel.innerHTML=`<s>تركّز — نشاط منخفض</s>`;
   const mx=Math.max(...d.table.map(t=>Math.max(t.call_vol,t.put_vol)),1);
   const pk=d.pin?d.pin.strike:null;
   let h="",placed=false;
@@ -898,18 +1037,40 @@ async function load(){
   }
   if(!placed)h+=`<div class="spot dim">${U} ${Number(d.spot).toFixed(2)}</div>`;
   B.innerHTML=h;
-  document.getElementById("chips").innerHTML=d.clusters.map(c=>{
+  // ── القائمة المدمجة: كول وبوت معاً مرتّبين بالحجم ──
+  const cmx=Math.max(...(d.clusters||[]).map(c=>c.vol),1);
+  const band=[d.target_lo_pct,d.target_hi_pct];
+  const gmap={}; for(const t of d.table) gmap[t.side+t.strike]=t.dp;
+  document.getElementById("chips").innerHTML=(d.clusters||[]).map(c=>{
    const up=c.side==="above",col=up?"#2dd4a0":"#ff5c72";
-   const bg=up?"rgba(45,212,160,.13)":"rgba(255,92,114,.13)";
-   return `<div class="chip" style="background:${bg};border-color:${col}55">
-    <b style="color:${col}">${c.strike}</b><s style="color:${col}">${K(c.vol)}</s></div>`;
+   const w=Math.max(8,Math.round(100*c.vol/cmx));
+   const dp=Math.abs(c.dist)/d.spot*100;
+   const hit=dp>=band[0]&&dp<=band[1];   // داخل شريحة الهدف
+   const g=gmap[c.side+c.strike];
+   const gt=(g==null)?"—":((g>0?"+":"")+g+"%");
+   const hot=g!=null&&g>=8;
+   return `<div class="clr">
+    <span class="dotc" style="background:${col}"></span>
+    <span class="s" style="color:${col}">${c.strike}</span>
+    <span class="bar"><i style="width:${w}%;background:${col}33"></i>
+     <b style="color:${col}">${K(c.vol)}</b></span>
+    <span class="d ${hit?"hit":""}">${c.dist>0?"+":""}${c.dist.toFixed(1)}</span>
+    <span class="g ${hot?"hot":""}">${gt}</span></div>`;
   }).join("");
  }catch(e){B.innerHTML=`<div class="err">⚠ ${e}</div>`;}
 }
 // ── دورة التحديث: تتوقف عند إخفاء الصفحة (توفير بطارية) ──
-let TIMER=null;
-function start(){if(TIMER)return;load();TIMER=setInterval(load,R*1000);}
-function stop(){if(TIMER){clearInterval(TIMER);TIMER=null;}}
+let TIMER=null,CUR=null;
+// [v1.3] خارج الجلسة لا شيء يتحرك ⇒ دورة بطيئة (60 ثانية) بدل 5 ثوانٍ.
+//        يوفّر بطارية واستدعاءات بلا أي فقد في المعلومة.
+function arm(sec){
+ if(TIMER&&CUR===sec)return;
+ if(TIMER)clearInterval(TIMER);
+ CUR=sec; TIMER=setInterval(load,sec*1000);
+}
+function stop(){if(TIMER){clearInterval(TIMER);TIMER=null;CUR=null;}}
+function start(){load();arm(R);}
+function pace(session){arm(session==="open"?R:60);}
 document.addEventListener("visibilitychange",()=>{document.hidden?stop():start();});
 start();
 </script></body></html>"""
