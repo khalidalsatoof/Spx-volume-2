@@ -1,10 +1,32 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.5)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.6)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
+
+  ── الجديد في v1.6 ──
+  ⑳ السلّم المركزي: السترايك في المنتصف · البوت يساراً والكول يميناً
+     العين تنزل عموداً واحداً بلا مسح أفقي في كل صف.
+     ⚠ مقياس الطول مشترك بين الجهتين (أطول شريط = 100%) — لو فُصل
+       المقياسان لبدا 33k مساوياً لـ38k وهو تشويه.
+  ㉑ خط السعر الحيّ يُدرَج بين السترايكين المحيطين به
+     يريك موقع السعر بينهما، ويفصل المنطقة الخضراء عن الحمراء بصرياً.
+  ㉒ عدّاد الهيمنة أسفل السلّم: شريط PUT/CALL + علامة التعادل 50%
+     + فرق العقود + التسارع. الحكم قبل قراءة أي رقم.
+  ㉓ تظليل النطاق النشط (رتبة 3–8) — المنطقة الوحيدة التي أظهرت
+     إشارة في أول قياس حقيقي. النطاقان القريب والواسع أعطيا صفراً.
+     ⚠ يبقى 8 سترايكات لكل جهة لا 6: النطاق النشط نفسه يمتد للرتبة 8،
+       فتقليصه إلى 6 يخفي ثلث المنطقة التي يُحسب عليها المؤشر.
+  ㉔ الأرقام دون 60 عقداً تُخفى — تنظيف الأطراف من ضجيج بلا معنى.
+
+  ── الجديد في v1.5 ──
+  ⑲ التدفّق يُقرأ من البوت (/liq_flow) لا من المتصفح
+     دوال Vercel بلا حالة، فكان الحساب في localStorage يحتاج صفحة
+     مفتوحة ربع ساعة — وأسوأ: لو فُتحت بعد ساعات أخذ لقطة قديمة جداً
+     كمرجع فأعطى رقماً خاطئاً يبدو صحيحاً. /liq_cron يبني التاريخ في
+     Postgres بلا علاقة بالمتصفح. أي فشل يسقط تلقائياً للحساب المحلي.
 
   ── الجديد في v1.3.2 ──
   ⑯ قائمة التجمّعات إلى ثمانية · عمود OI الخام بدل نسبة الحجم/OI
@@ -806,7 +828,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .witem s{text-decoration:none;opacity:.75;font-size:9.5px;margin-inline-start:3px}
 .witem s.hit{color:var(--dn);opacity:1;font-weight:700}
 
-/* ── [v1.5] لوحة تدفّق آخر 15 دقيقة ── */
+/* ── [v1.6] لوحة تدفّق آخر 15 دقيقة ── */
 .flow{background:var(--c1);border:1px solid var(--ln);border-radius:13px;
  padding:8px 9px 6px;margin-bottom:9px}
 .fhd{display:flex;justify-content:space-between;align-items:center;gap:6px;
@@ -816,15 +838,32 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .ft1{background:rgba(255,255,255,.03);border-radius:9px;padding:6px 3px;text-align:center}
 .ft1 u{display:block;font-size:9px;color:var(--dim);text-decoration:none;margin-bottom:2px}
 .ft1 b{font-size:14px;font-weight:700}
-.fr{display:grid;grid-template-columns:40px 1fr 1fr;gap:4px;align-items:center;
- margin-bottom:2px}
+/* [v1.6] السترايك في المنتصف · البوت يساراً والكول يميناً
+   مقياس الطول مشترك بين الجهتين ⇒ النسب صادقة بصرياً */
+.fr{display:grid;grid-template-columns:1fr 46px 1fr;gap:4px;align-items:center;
+ height:18px;margin-bottom:1px;padding:0 2px;border-radius:3px}
+.fr.act{background:rgba(255,181,71,.10)}   /* النطاق النشط رتبة 3–8 */
 .fs{font-size:10.5px;font-weight:700;text-align:center}
-.fb{position:relative;height:11px;background:rgba(255,255,255,.03);
- border-radius:3px;overflow:hidden}
-.fb i{position:absolute;inset-inline-start:0;top:0;height:100%;border-radius:3px;
- transition:width .4s}
-.fb b{position:absolute;inset-inline-start:5px;top:0;line-height:11px;
- font-size:8.5px;font-weight:700}
+.fhalf{display:flex;align-items:center;gap:4px;min-width:0}
+.fhalf.l{justify-content:flex-end}
+.fbar{height:10px;border-radius:2px;transition:width .4s;flex:0 0 auto}
+.fnum{font-size:9px;font-weight:700;white-space:nowrap}
+/* خط السعر — يُدرَج بين السترايكين المحيطين بالسعر */
+.fpx{display:flex;align-items:center;gap:6px;margin:3px 0 4px}
+.fpx i{flex:1;height:2px;background:var(--ac);border-radius:1px}
+.fpx b{font-size:10px;font-weight:700;color:#fff;background:var(--ac);
+ border-radius:9px;padding:2px 8px;white-space:nowrap}
+/* عدّاد الهيمنة */
+.fmet{margin-top:9px;padding-top:8px;border-top:1px solid rgba(33,43,60,.6)}
+.fmlbl{display:flex;justify-content:space-between;align-items:center;
+ font-size:10px;margin-bottom:5px}
+.fmbar{position:relative;height:8px;border-radius:4px;overflow:hidden;display:flex}
+.fmbar u{height:100%;transition:width .4s}
+.fmmid{position:relative;height:0}
+.fmmid s{position:absolute;inset-inline-start:50%;top:-11px;width:2px;height:14px;
+ background:var(--tx);opacity:.55;transform:translateX(-50%)}
+.fmfoot{display:flex;justify-content:space-between;margin-top:8px;
+ font-size:9.5px;color:var(--dim)}
 .tbl{background:var(--c1);border:1px solid var(--ln);border-radius:15px;overflow:hidden}
 .hdr{display:grid;grid-template-columns:38px 1fr 32px 44px 36px;gap:4px;padding:6px 8px;
  font-size:8.5px;color:var(--dim);text-align:center;border-bottom:1px solid var(--ln)}
@@ -897,6 +936,17 @@ body{margin:0;background:var(--bg);color:var(--tx);
   <div class="ft1"><u>بوت</u><b id="fput" style="color:var(--dn)">—</b></div>
  </div>
  <div id="fbars"></div>
+ <div class="fmet" id="fmet" style="display:none">
+  <div class="fmlbl">
+   <span id="fmput" style="color:var(--dn);font-weight:700">PUT —</span>
+   <span id="fmdiff" style="color:var(--dim)">—</span>
+   <span id="fmcall" style="color:var(--up);font-weight:700">CALL —</span></div>
+  <div class="fmbar"><u id="fmp" style="background:#ff5c72;width:50%"></u>
+   <u id="fmc" style="background:#2dd4a0;width:50%"></u></div>
+  <div class="fmmid"><s></s></div>
+  <div class="fmfoot"><span id="fmacc">تسارع —</span>
+   <span>النطاق النشط مظلَّل · رتبة 3–8</span></div>
+ </div>
 </div>
 
 <div class="walls">
@@ -922,7 +972,7 @@ const WIN=300000;        // نافذة 5 دقائق — بالطابع الزم�
 const KEEP=7200000;      // ساعتان: يكفيان لوسيط متدحرج ذي معنى
 const STEP=30000;        // لقطة محفوظة كل 30 ثانية (الدورة تبقى 5 ثوانٍ)
 const MIN_BASE=6;        // أقل عدد نوافذ قبل عرض المضاعف
-/* ═══ [v1.5] تدفّق آخر 15 دقيقة ═══
+/* ═══ [v1.6] تدفّق آخر 15 دقيقة ═══
    المبدأ: حجم الخيارات تراكمي منذ ما قبل الافتتاح ولا ينخفض أبداً.
    ⇒ الفرق بين لقطتين = ما تُدووِل في تلك الفترة بالضبط.
    ⚠ الطرح يتم **لكل سترايك على حدة** لا على المجموع: السعر يتحرك
@@ -930,7 +980,7 @@ const MIN_BASE=6;        // أقل عدد نوافذ قبل عرض المضاع�
      حركة السعر لا التدفّق. (خطأ وقعنا فيه وصحّحناه — 4 سبتمبر)
    ⚠ رصيد ما قبل الافتتاح يسقط تلقائياً في الفرح لأنه في اللقطتين معاً. */
 const FK="liq_flow_"+U;
-/* [v1.5] مصدر التدفّق الأساسي: البوت.
+/* [v1.6] مصدر التدفّق الأساسي: البوت.
    دوال Vercel بلا حالة فلا تحفظ لقطة سابقة، وحساب المتصفح كان يحتاج
    صفحة مفتوحة ربع ساعة — وأسوأ: لو فُتحت بعد ساعات أخذ لقطة قديمة
    جداً كمرجع فأعطى رقماً خاطئاً يبدو صحيحاً.
@@ -1037,7 +1087,7 @@ function walls(el,list,col,tag){
    <s>${K(w.oi)}</s><s class="${w.in_target?"hit":""}">${d}</s></span>`;
  }).join("");
 }
-/* ══ [v1.5] لوحة تدفّق آخر 15 دقيقة ══
+/* ══ [v1.6] لوحة تدفّق آخر 15 دقيقة ══
    ما تقوله: أين تُتداول العقود **الآن** — لا منذ الافتتاح.
    ⚠ لا تقول من المشتري ومن البائع (كل صفقة لها طرفان)، بل أين
      تتركّز الحرارة. ⚠ عتبات النص مؤقتة حتى تتوفر مئينات حقيقية. */
@@ -1048,6 +1098,53 @@ async function renderFlow(d){
  if(sv&&sv.flow_bias_active!=null){drawFlow(sv,d,true);return;}
  // ── الاحتياطي: حساب المتصفح ──
  drawFlowLocal(d);
+}
+/* [v1.6] الرسم المشترك — يستعمله مسار البوت ومسار المتصفح معاً.
+   المصدر واحد للتخطيط فلا ينحرف أحدهما عن الآخر مع الوقت.
+   per = [{strike,call,put}] · spot = سعر الأداة لحظة اللقطة */
+function paintFlow(per, spot, acc){
+ const F=document.getElementById("fbars"), M=document.getElementById("fmet");
+ if(!per||!per.length){F.innerHTML="";if(M)M.style.display="none";return;}
+ const rows=per.slice().sort((a,b)=>b.strike-a.strike);
+ // مقياس مشترك للجهتين: أطول شريط في الجدول = 100%
+ const mx=Math.max(...rows.map(x=>Math.max(x.call,x.put)),1);
+ // الرتبة من السعر لكل جهة على حدة — النطاق النشط 3–8
+ const ab=rows.filter(x=>x.strike>spot).map(x=>x.strike).sort((a,b)=>a-b);
+ const be=rows.filter(x=>x.strike<=spot).map(x=>x.strike).sort((a,b)=>b-a);
+ const rank=k=>((k>spot?ab:be).indexOf(k)+1);
+ let h="",C=0,P=0;
+ rows.forEach((x,i)=>{
+  C+=x.call; P+=x.put;
+  const up=x.strike>spot, rk=rank(x.strike), act=rk>=3&&rk<=8;
+  const wc=Math.max(1,Math.round(100*x.call/mx));
+  const wp=Math.max(1,Math.round(100*x.put/mx));
+  h+=`<div class="fr${act?" act":""}">
+   <span class="fhalf l"><span class="fnum" style="color:#ff5c72">${x.put>60?K(Math.round(x.put)):""}</span>
+    <span class="fbar" style="width:${wp}%;background:#ff5c72b3"></span></span>
+   <span class="fs" style="color:${up?"#2dd4a0":"#ff5c72"}">${x.strike}</span>
+   <span class="fhalf"><span class="fbar" style="width:${wc}%;background:#2dd4a0b3"></span>
+    <span class="fnum" style="color:#2dd4a0">${x.call>60?K(Math.round(x.call)):""}</span></span></div>`;
+  // خط السعر يُدرج بين السترايكين المحيطين به
+  const nx=rows[i+1];
+  if(nx&&x.strike>spot&&nx.strike<=spot)
+   h+=`<div class="fpx"><i></i><b>${Number(spot).toFixed(2)}</b><i></i></div>`;
+ });
+ F.innerHTML=h;
+ // ── عدّاد الهيمنة ──
+ if(!M)return;
+ const tot=C+P;
+ if(tot<=0){M.style.display="none";return;}
+ M.style.display="";
+ const pp=P/tot*100, pc=100-pp;
+ document.getElementById("fmp").style.width=pp+"%";
+ document.getElementById("fmc").style.width=pc+"%";
+ document.getElementById("fmput").textContent="PUT "+pp.toFixed(0)+"%";
+ document.getElementById("fmcall").textContent="CALL "+pc.toFixed(0)+"%";
+ document.getElementById("fmdiff").textContent=
+  "فرق "+K(Math.round(Math.abs(C-P)))+" عقد";
+ const fa=document.getElementById("fmacc");
+ fa.innerHTML=acc==null?"تسارع —"
+  :`تسارع <b style="color:${acc>=2?"var(--wr)":"var(--tx)"}">${acc.toFixed(1)}×</b>`;
 }
 /* رسم من رد البوت */
 function drawFlow(sv,d,fromBot){
@@ -1074,19 +1171,7 @@ function drawFlow(sv,d,fromBot){
  document.getElementById("fnote").innerHTML=
   `<span style="color:${col};font-weight:700">${burst?"⚡ ":""}${note} ${dom}%</span>`
   +`<s style="color:var(--ft);font-weight:600"> · ${w}د · مؤقتة</s>`+ageTxt;
- const per=sv.per_strike||[];
- if(!per.length){document.getElementById("fbars").innerHTML="";return;}
- const mx=Math.max(...per.map(x=>Math.max(x.call,x.put)),1);
- document.getElementById("fbars").innerHTML=per.map(x=>{
-  const above=x.strike>(sv.spot||d.spot);
-  const wc=Math.round(100*x.call/mx),wp=Math.round(100*x.put/mx);
-  return `<div class="fr">
-   <span class="fs" style="color:${above?"#2dd4a0":"#ff5c72"}">${x.strike}</span>
-   <span class="fb"><i style="width:${wc}%;background:#2dd4a055"></i>
-    <b style="color:#2dd4a0">${x.call?K(Math.round(x.call)):""}</b></span>
-   <span class="fb"><i style="width:${wp}%;background:#ff5c7255"></i>
-    <b style="color:#ff5c72">${x.put?K(Math.round(x.put)):""}</b></span></div>`;
- }).join("");
+ paintFlow(sv.per_strike||[], sv.spot||d.spot, acc);
 }
 /* الاحتياطي — حساب المتصفح (يعمل لو تعذّر البوت أو على SPY) */
 function drawFlowLocal(d){
@@ -1107,6 +1192,7 @@ function drawFlowLocal(d){
        :'<s style="color:var(--dim)">جارٍ بناء النافذة — '
         +Math.max(0,15-Math.round((F.n*FSTEP)/60000))+' دقيقة متبقية</s>';
   document.getElementById("fbars").innerHTML="";
+  const _m=document.getElementById("fmet"); if(_m)_m.style.display="none";
   setTxt("fcall","—"); setTxt("fput","—"); setTxt("faccel","—");
   return;
  }
@@ -1131,19 +1217,7 @@ function drawFlowLocal(d){
  document.getElementById("fnote").innerHTML=
   `<span style="color:${col};font-weight:700">${burst?"⚡ ":""}${note} ${dom}%</span>`
   +`<s style="color:var(--ft);font-weight:600"> · مؤقتة</s>`;
- // الأشرطة لكل سترايك
- const mx=Math.max(...now.per.map(x=>Math.max(x.call,x.put)),1);
- document.getElementById("fbars").innerHTML=now.per
-  .slice().sort((a,b)=>b.strike-a.strike).map(x=>{
-   const above=x.strike>d.spot;
-   const wc=Math.round(100*x.call/mx),wp=Math.round(100*x.put/mx);
-   return `<div class="fr">
-    <span class="fs" style="color:${above?"#2dd4a0":"#ff5c72"}">${x.strike}</span>
-    <span class="fb"><i style="width:${wc}%;background:#2dd4a055"></i>
-     <b style="color:#2dd4a0">${x.call?K(x.call):""}</b></span>
-    <span class="fb"><i style="width:${wp}%;background:#ff5c7255"></i>
-     <b style="color:#ff5c72">${x.put?K(x.put):""}</b></span></div>`;
-  }).join("");
+ paintFlow(now.per, d.spot, acc);
 }
 async function load(){
  const B=document.getElementById("body");
@@ -1206,7 +1280,7 @@ async function load(){
   const rf=H.ref;
   for(const t of d.table){const pv=rf?rf[t.side+t.strike]:null;
    t.dp=(pv&&pv>0)?Math.round((t.main_vol-pv)/pv*1000)/10:null;}
-  // ══════ [v1.5] تدفّق آخر 15 دقيقة — 8 سترايكات فوق و8 تحت ══════
+  // ══════ [v1.6] تدفّق آخر 15 دقيقة — 8 سترايكات فوق و8 تحت ══════
   renderFlow(d).catch(e=>console.log("flow",e));
   // ── تركّز النشاط: نسبة حجم أكبر خمسة تجمّعات فوق السعر إلى مجموعها ──
   // ⚠ «فوق/تحت» لا «كول/بوت»: التجمّع فوق السعر يُحسب كولاً بحكم التعريف
