@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.4)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.5)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
@@ -806,7 +806,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .witem s{text-decoration:none;opacity:.75;font-size:9.5px;margin-inline-start:3px}
 .witem s.hit{color:var(--dn);opacity:1;font-weight:700}
 
-/* ── [v1.4] لوحة تدفّق آخر 15 دقيقة ── */
+/* ── [v1.5] لوحة تدفّق آخر 15 دقيقة ── */
 .flow{background:var(--c1);border:1px solid var(--ln);border-radius:13px;
  padding:8px 9px 6px;margin-bottom:9px}
 .fhd{display:flex;justify-content:space-between;align-items:center;gap:6px;
@@ -922,7 +922,7 @@ const WIN=300000;        // نافذة 5 دقائق — بالطابع الزم�
 const KEEP=7200000;      // ساعتان: يكفيان لوسيط متدحرج ذي معنى
 const STEP=30000;        // لقطة محفوظة كل 30 ثانية (الدورة تبقى 5 ثوانٍ)
 const MIN_BASE=6;        // أقل عدد نوافذ قبل عرض المضاعف
-/* ═══ [v1.4] تدفّق آخر 15 دقيقة ═══
+/* ═══ [v1.5] تدفّق آخر 15 دقيقة ═══
    المبدأ: حجم الخيارات تراكمي منذ ما قبل الافتتاح ولا ينخفض أبداً.
    ⇒ الفرق بين لقطتين = ما تُدووِل في تلك الفترة بالضبط.
    ⚠ الطرح يتم **لكل سترايك على حدة** لا على المجموع: السعر يتحرك
@@ -930,6 +930,28 @@ const MIN_BASE=6;        // أقل عدد نوافذ قبل عرض المضاع�
      حركة السعر لا التدفّق. (خطأ وقعنا فيه وصحّحناه — 4 سبتمبر)
    ⚠ رصيد ما قبل الافتتاح يسقط تلقائياً في الفرح لأنه في اللقطتين معاً. */
 const FK="liq_flow_"+U;
+/* [v1.5] مصدر التدفّق الأساسي: البوت.
+   دوال Vercel بلا حالة فلا تحفظ لقطة سابقة، وحساب المتصفح كان يحتاج
+   صفحة مفتوحة ربع ساعة — وأسوأ: لو فُتحت بعد ساعات أخذ لقطة قديمة
+   جداً كمرجع فأعطى رقماً خاطئاً يبدو صحيحاً.
+   /liq_cron يبني التاريخ في Postgres كل خمس دقائق بلا علاقة بالمتصفح.
+   ⚠ قراءة فقط · وأي فشل يسقط تلقائياً إلى حساب المتصفح. */
+const BOT="https://spx-paper-bot.onrender.com";
+const SRV_MS=60000;              // نداء البوت كل دقيقة (التدفّق يتغيّر كل 5)
+let SRV={t:0,data:null};
+async function srvFlow(){
+ if(U!=="SPX")return null;       // البوت يسجّل SPX فقط
+ const now=Date.now();
+ if(SRV.data&&now-SRV.t<SRV_MS)return SRV.data;
+ try{
+  const c=new AbortController(); setTimeout(()=>c.abort(),4000);
+  const r=await fetch(BOT+"/liq_flow",{signal:c.signal});
+  if(!r.ok)return SRV.data;
+  const j=await r.json();
+  if(!j||!j.ok)return SRV.data;
+  SRV={t:now,data:j}; return j;
+ }catch(e){return SRV.data;}
+}
 const FWIN=900000;       // نافذة 15 دقيقة
 const FSTEP=60000;       // لقطة تدفّق كل دقيقة
 const FKEEP=5400000;     // ساعة ونصف
@@ -1015,12 +1037,59 @@ function walls(el,list,col,tag){
    <s>${K(w.oi)}</s><s class="${w.in_target?"hit":""}">${d}</s></span>`;
  }).join("");
 }
-/* ══ [v1.4] لوحة تدفّق آخر 15 دقيقة ══
+/* ══ [v1.5] لوحة تدفّق آخر 15 دقيقة ══
    ما تقوله: أين تُتداول العقود **الآن** — لا منذ الافتتاح.
    ⚠ لا تقول من المشتري ومن البائع (كل صفقة لها طرفان)، بل أين
      تتركّز الحرارة. ⚠ عتبات النص مؤقتة حتى تتوفر مئينات حقيقية. */
-function renderFlow(d){
+async function renderFlow(d){
  const el=document.getElementById("flow"); if(!el)return;
+ // ── المصدر الأول: البوت (تاريخ دائم · يعمل فور فتح الصفحة) ──
+ const sv=await srvFlow();
+ if(sv&&sv.flow_bias_active!=null){drawFlow(sv,d,true);return;}
+ // ── الاحتياطي: حساب المتصفح ──
+ drawFlowLocal(d);
+}
+/* رسم من رد البوت */
+function drawFlow(sv,d,fromBot){
+ const setTxt=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+ const c=sv.flow_call_15m||0,p=sv.flow_put_15m||0,tot=c+p;
+ setTxt("fcall",K(Math.round(c))); setTxt("fput",K(Math.round(p)));
+ const acc=sv.flow_accel;
+ setTxt("faccel",acc==null?"—":acc.toFixed(1)+"×");
+ const ae=document.getElementById("faccel");
+ if(ae)ae.style.color=acc==null?"var(--dim)":(acc>=2?"var(--wr)":(acc>=1.3?"var(--tx)":"var(--dim)"));
+ const cp=tot>0?c/tot*100:50;
+ let note,col;
+ if(cp>=F_STRONG){note="نشاط CALL";col="var(--up)";}
+ else if(100-cp>=F_STRONG){note="نشاط PUT";col="var(--dn)";}
+ else if(Math.max(cp,100-cp)>=F_WEAK){
+  note=(cp>50?"ميل CALL":"ميل PUT")+" · تركيز منخفض";
+  col=cp>50?"rgba(45,212,160,.65)":"rgba(255,92,114,.65)";
+ }else{note="نشاط متوازن";col="var(--dim)";}
+ const dom=Math.max(cp,100-cp).toFixed(0);
+ const burst=acc!=null&&acc>=2&&Math.max(cp,100-cp)>=F_STRONG;
+ const w=sv.flow_window_min?Math.round(sv.flow_window_min):15;
+ const ageTxt=(sv.snap_age_min!=null&&sv.snap_age_min>7)
+   ?`<s style="color:var(--wr)"> · اللقطة قبل ${Math.round(sv.snap_age_min)}د</s>`:"";
+ document.getElementById("fnote").innerHTML=
+  `<span style="color:${col};font-weight:700">${burst?"⚡ ":""}${note} ${dom}%</span>`
+  +`<s style="color:var(--ft);font-weight:600"> · ${w}د · مؤقتة</s>`+ageTxt;
+ const per=sv.per_strike||[];
+ if(!per.length){document.getElementById("fbars").innerHTML="";return;}
+ const mx=Math.max(...per.map(x=>Math.max(x.call,x.put)),1);
+ document.getElementById("fbars").innerHTML=per.map(x=>{
+  const above=x.strike>(sv.spot||d.spot);
+  const wc=Math.round(100*x.call/mx),wp=Math.round(100*x.put/mx);
+  return `<div class="fr">
+   <span class="fs" style="color:${above?"#2dd4a0":"#ff5c72"}">${x.strike}</span>
+   <span class="fb"><i style="width:${wc}%;background:#2dd4a055"></i>
+    <b style="color:#2dd4a0">${x.call?K(Math.round(x.call)):""}</b></span>
+   <span class="fb"><i style="width:${wp}%;background:#ff5c7255"></i>
+    <b style="color:#ff5c72">${x.put?K(Math.round(x.put)):""}</b></span></div>`;
+ }).join("");
+}
+/* الاحتياطي — حساب المتصفح (يعمل لو تعذّر البوت أو على SPY) */
+function drawFlowLocal(d){
  // النافذة: أقرب FSTRIKES فوق السعر وFSTRIKES تحته
  const ab=d.table.filter(t=>t.side==="above").sort((a,b)=>a.dist-b.dist).slice(0,FSTRIKES);
  const be=d.table.filter(t=>t.side==="below").sort((a,b)=>b.dist-a.dist).slice(0,FSTRIKES);
@@ -1137,8 +1206,8 @@ async function load(){
   const rf=H.ref;
   for(const t of d.table){const pv=rf?rf[t.side+t.strike]:null;
    t.dp=(pv&&pv>0)?Math.round((t.main_vol-pv)/pv*1000)/10:null;}
-  // ══════ [v1.4] تدفّق آخر 15 دقيقة — 8 سترايكات فوق و8 تحت ══════
-  renderFlow(d);
+  // ══════ [v1.5] تدفّق آخر 15 دقيقة — 8 سترايكات فوق و8 تحت ══════
+  renderFlow(d).catch(e=>console.log("flow",e));
   // ── تركّز النشاط: نسبة حجم أكبر خمسة تجمّعات فوق السعر إلى مجموعها ──
   // ⚠ «فوق/تحت» لا «كول/بوت»: التجمّع فوق السعر يُحسب كولاً بحكم التعريف
   //   لا باختيار السوق ⇒ هذا وصف تركّز نشاط، لا رأي اتجاهي.
