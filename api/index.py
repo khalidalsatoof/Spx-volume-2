@@ -1,19 +1,27 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.3.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.4)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
-  ── الجديد في v1.3.1 ──
-  ⑯ عمود «الحجم ÷ OI» لكل سترايك — يفصل التموضع الجديد عن المخزون القائم
-     مثال حي (28 أغسطس): 7730 حجم 14k وOI 687 ⇒ 20.4× (نشاط جديد · ليس جداراً)
-                          7700 حجم 12k وOI 8.0k ⇒ 1.5×  (مخزون قائم · جدار حقيقي)
-     الشريط يعرضهما متقاربين وهما نقيضان ⇒ النسبة هي ما يفصلهما.
-     ⚠ لا يحمل اتجاهاً — يحمل **جودة** التجمّع. ولا يميّز الشراء من البيع.
-     ⚠ الفصل النهائي بين فتح مركز وإغلاقه لا يُعرف إلا بعد تحديث OI (بعد الإغلاق).
-  ⑰ قائمة التجمّعات إلى ثمانية (كانت ستة) + عمود الحجم/OI فيها
+  ── الجديد في v1.3.2 ──
+  ⑯ قائمة التجمّعات إلى ثمانية · عمود OI الخام بدل نسبة الحجم/OI
+
+  ⚠⚠ لماذا حُذفت نسبة «الحجم ÷ OI» — نتيجة محاكاة زمنية على 25 لقطة حقيقية:
+      الحجم يتراكم طوال اليوم وOI ثابت ⇒ النسبة تنزاح مع الساعة لا مع الأهمية.
+      وسيط النسبة عبر اليوم: 09:35 = 1.0×  ·  11:30 = 3.3×  ·  15:45 = 6.9×
+      ⇒ أي عتبة ثابتة (مثل ≥3× = جديد) تنطفئ صباحاً وتضيء على كل شيء عصراً.
+      وحتى النسبة المطبّعة بوسيط اللحظة تنزاح: السترايك 7700 يوم 2 سبتمبر
+      خام 1.3× ← 15.8× ومطبّع 1.17 ← 2.52 ⇒ لا تصلح كمقياس ثابت.
+
+  ✅ البديل المُثبَت: «الحصة من الحجم الكلي» — قيست على 25 لقطة عبر ثلاثة أيام
+      المدى 2.9%–9.0% والوسيط 5.0% بلا أي انزياح زمني. وهي معروضة أصلاً
+      كطول الشريط ⇒ لا حاجة لعمود رقمي يكرّرها.
+  ✅ وOI الخام هو مقياس الرسوخ: OI عالٍ = التزام قائم من أمس (مصدر آلية التثبيت)
+      OI منخفض مع حجم عالٍ = نشاط اليوم بلا مخزون خلفه ⇒ تجمّع هشّ.
+      ⚠ الرقم المنخفض في OI هو الضعيف — لا العكس. (تصحيح تلوين v1.3.1)
 
   ── v1.3 ──
   ⑩ قائمة التجمّعات المدمجة: كول وبوت في قائمة واحدة مرتّبة بالحجم
@@ -413,9 +421,6 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         t["main_spread"] = t["call_spread"] if up else t["put_spread"]
         t["spread_pct"] = (round(t["main_spread"] / t["main_mid"] * 100, 1)
                            if t["main_spread"] and t["main_mid"] else None)
-        # [v1.3.1] الحجم ÷ OI للجانب المهيمن — تموضع جديد مقابل مخزون قائم
-        t["vol_oi"] = (round(t["main_vol"] / t["main_oi"], 1)
-                       if t["main_oi"] and t["main_oi"] > 0 else None)
 
     # ── التغيّر خلال DELTA_WINDOW (نسخة الخادم — الاعتماد على نسخة المتصفح) ──
     hist = _HIST.setdefault(underlying, [])
@@ -495,7 +500,8 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         # [v1.3] قائمة مدمجة: كول وبوت معاً مرتّبين بالحجم، مع البُعد والـOI
         "clusters": [{"strike": c["strike"], "vol": c["main_vol"],
                       "side": c["side"], "dist": c["dist"],
-                      "oi": c["main_oi"], "vol_oi": c["vol_oi"]}
+                      "oi": c["main_oi"],
+                      "share": round(100.0 * c["main_vol"] / tot, 1)}
                      for c in clusters],
         "pin": {"strike": pin["strike"], "oi": pin["main_oi"],
                 "side": pin["side"]} if pin else None,
@@ -766,8 +772,10 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .clr .g{text-align:center;font-size:9.5px;color:var(--dim)}
 .clr .g.hot{color:var(--up);font-weight:700;
  text-shadow:0 0 8px rgba(45,212,160,.55)}
+/* OI = رسوخ التجمّع · العالي أقوى — عكس ما كان في v1.3.1 */
 .clr .v{text-align:center;font-size:9.5px;font-weight:700;color:var(--dim)}
-.clr .v.fresh{color:var(--wr);text-shadow:0 0 8px rgba(255,181,71,.45)}
+.clr .v.solid{color:var(--tx);text-shadow:0 0 9px rgba(233,238,246,.35)}
+.clr .v.thin{opacity:.35}
 .bdg{display:inline-block;padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;
  margin-inline-start:5px;vertical-align:1px}
 .exp{background:var(--c1);border:1px solid var(--ln);border-radius:11px;
@@ -798,10 +806,29 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .witem s{text-decoration:none;opacity:.75;font-size:9.5px;margin-inline-start:3px}
 .witem s.hit{color:var(--dn);opacity:1;font-weight:700}
 
+/* ── [v1.4] لوحة تدفّق آخر 15 دقيقة ── */
+.flow{background:var(--c1);border:1px solid var(--ln);border-radius:13px;
+ padding:8px 9px 6px;margin-bottom:9px}
+.fhd{display:flex;justify-content:space-between;align-items:center;gap:6px;
+ font-size:10px;color:var(--dim);margin-bottom:7px}
+.fhd s{text-decoration:none;font-size:9px}
+.ftot{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:7px}
+.ft1{background:rgba(255,255,255,.03);border-radius:9px;padding:6px 3px;text-align:center}
+.ft1 u{display:block;font-size:9px;color:var(--dim);text-decoration:none;margin-bottom:2px}
+.ft1 b{font-size:14px;font-weight:700}
+.fr{display:grid;grid-template-columns:40px 1fr 1fr;gap:4px;align-items:center;
+ margin-bottom:2px}
+.fs{font-size:10.5px;font-weight:700;text-align:center}
+.fb{position:relative;height:11px;background:rgba(255,255,255,.03);
+ border-radius:3px;overflow:hidden}
+.fb i{position:absolute;inset-inline-start:0;top:0;height:100%;border-radius:3px;
+ transition:width .4s}
+.fb b{position:absolute;inset-inline-start:5px;top:0;line-height:11px;
+ font-size:8.5px;font-weight:700}
 .tbl{background:var(--c1);border:1px solid var(--ln);border-radius:15px;overflow:hidden}
-.hdr{display:grid;grid-template-columns:36px 1fr 30px 30px 42px 34px;gap:3px;padding:6px 6px;
+.hdr{display:grid;grid-template-columns:38px 1fr 32px 44px 36px;gap:4px;padding:6px 8px;
  font-size:8.5px;color:var(--dim);text-align:center;border-bottom:1px solid var(--ln)}
-.rw{display:grid;grid-template-columns:36px 1fr 30px 30px 42px 34px;gap:3px;padding:4px 6px;
+.rw{display:grid;grid-template-columns:38px 1fr 32px 44px 36px;gap:4px;padding:4px 8px;
  align-items:center;border-bottom:1px solid rgba(33,43,60,.5)}
 .rw:last-child{border-bottom:none}
 .rw.pin{background:rgba(255,181,71,.075)}
@@ -811,9 +838,6 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .bf{position:absolute;inset-inline-start:0;top:0;height:100%;border-radius:3px;transition:width .4s}
 .bv{position:absolute;inset-inline-start:5px;top:0;line-height:11px;font-size:8.5px;font-weight:700}
 .cp{text-align:center;font-size:9.5px;font-weight:700}
-/* الحجم ÷ OI — تموضع جديد مقابل مخزون قائم */
-.vo{text-align:center;font-size:9.5px;font-weight:700;color:var(--dim)}
-.vo.fresh{color:var(--wr)}
 .pp{text-align:center;line-height:1.3;font-size:9.5px;font-weight:600}
 .pp i{font-style:normal;display:block}
 .rt{text-align:center;line-height:1.3;font-size:8.5px;color:var(--dim)}
@@ -864,18 +888,29 @@ body{margin:0;background:var(--bg);color:var(--tx);
  <div class="st"><u>بوت</u><b id="pv" style="color:var(--dn)">—</b></div>
 </div>
 
+<div class="flow" id="flow">
+ <div class="fhd"><span>تدفّق آخر 15 دقيقة · 8 سترايك فوق و8 تحت</span>
+  <span id="fnote"><s style="color:var(--dim)">جارٍ بناء النافذة…</s></span></div>
+ <div class="ftot">
+  <div class="ft1"><u>كول</u><b id="fcall" style="color:var(--up)">—</b></div>
+  <div class="ft1"><u>تسارع</u><b id="faccel">—</b></div>
+  <div class="ft1"><u>بوت</u><b id="fput" style="color:var(--dn)">—</b></div>
+ </div>
+ <div id="fbars"></div>
+</div>
+
 <div class="walls">
  <div class="wrow up" id="wup"><span class="wtag" style="color:var(--up)">▲ OI</span></div>
  <div class="wrow dn" id="wdn"><span class="wtag" style="color:var(--dn)">▼ OI</span></div>
 </div>
 
 <div class="tbl">
- <div class="hdr"><span>سترايك</span><span>كول / بوت</span><span>نسبة</span><span>ح/OI</span>
+ <div class="hdr"><span>سترايك</span><span>كول / بوت</span><span>نسبة</span>
   <span>السعر</span><span>OI · 5د</span></div>
  <div id="body"><div class="err">جارٍ التحميل…</div></div>
 </div>
 
-<div class="ctitle">أكبر ثمانية تجمّعات — كول وبوت معاً · مرتّبة بالحجم</div>
+<div class="ctitle">أكبر ثمانية تجمّعات — الشريط = الحصة · OI = الرسوخ</div>
 <div class="cl" id="chips"></div>
 
 <script>
@@ -887,10 +922,22 @@ const WIN=300000;        // نافذة 5 دقائق — بالطابع الزم�
 const KEEP=7200000;      // ساعتان: يكفيان لوسيط متدحرج ذي معنى
 const STEP=30000;        // لقطة محفوظة كل 30 ثانية (الدورة تبقى 5 ثوانٍ)
 const MIN_BASE=6;        // أقل عدد نوافذ قبل عرض المضاعف
+/* ═══ [v1.4] تدفّق آخر 15 دقيقة ═══
+   المبدأ: حجم الخيارات تراكمي منذ ما قبل الافتتاح ولا ينخفض أبداً.
+   ⇒ الفرق بين لقطتين = ما تُدووِل في تلك الفترة بالضبط.
+   ⚠ الطرح يتم **لكل سترايك على حدة** لا على المجموع: السعر يتحرك
+     فيدخل السترايك النافذة أو يخرج منها، والطرح على المجموع يقيس
+     حركة السعر لا التدفّق. (خطأ وقعنا فيه وصحّحناه — 4 سبتمبر)
+   ⚠ رصيد ما قبل الافتتاح يسقط تلقائياً في الفرح لأنه في اللقطتين معاً. */
+const FK="liq_flow_"+U;
+const FWIN=900000;       // نافذة 15 دقيقة
+const FSTEP=60000;       // لقطة تدفّق كل دقيقة
+const FKEEP=5400000;     // ساعة ونصف
+const FSTRIKES=8;        // 8 سترايكات فوق السعر و8 تحته
+/* عتبات مؤقتة — تُستبدل بمئينات حقيقية بعد أسبوعين من البيانات */
+const F_STRONG=60, F_WEAK=55;
 const K=v=>v==null?"—":(v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":String(v));
 const P=v=>v==null?"—":Number(v).toFixed(2);
-// الحجم ÷ OI: ≥3× تموضع جديد غالباً · <1× تداول على مخزون قائم
-const VO=v=>v==null?"—":(v>=100?Math.round(v)+"×":v.toFixed(1)+"×");
 function hist(){try{return JSON.parse(localStorage.getItem(HK))||[]}catch(e){return[]}}
 function median(a){if(!a.length)return null;const b=[...a].sort((x,y)=>x-y);
  const m=b.length>>1;return b.length%2?b[m]:(b[m-1]+b[m])/2;}
@@ -923,6 +970,38 @@ function push(snap,tot){
  }
  return {ref:ref,mult:mult,ready:ready,n:deltas.length};
 }
+/* يحفظ لقطة تدفّق ويرجع مرجعين: قبل 15د وقبل 30د.
+   الثاني يخدم التسارع: تدفّق آخر 15د ÷ تدفّق الـ15د التي تسبقها.
+   ⚠ لا يقارن بمتوسط اليوم: في أول ساعة يكون المتوسط محسوباً على
+     دقائق قليلة والافتتاح أنشط ما في اليوم ⇒ مقام مضخّم ونسبة كاذبة.
+     المقارنة بالنافذة السابقة تعمل من أول ثلاث لقطات وأصدق مفهومياً. */
+function pushFlow(cm,pm){
+ let h; try{h=JSON.parse(localStorage.getItem(FK))||[]}catch(e){h=[]}
+ const now=Date.now();
+ if(!h.length||now-h[h.length-1].t>FSTEP)h.push({t:now,c:cm,p:pm});
+ h=h.filter(x=>now-x.t<FKEEP);
+ try{localStorage.setItem(FK,JSON.stringify(h))}catch(e){
+   try{localStorage.setItem(FK,JSON.stringify(h.slice(-60)))}catch(e2){}}
+ let r1=null,r2=null;
+ for(const x of h){
+  if(now-x.t>=FWIN)r1=x;
+  if(now-x.t>=FWIN*2)r2=x;
+  else if(now-x.t<FWIN)break;
+ }
+ return {cur:{t:now,c:cm,p:pm},r1:r1,r2:r2,n:h.length};
+}
+/* فرق الأحجام بين لقطتين لكل سترايك داخل نافذة FSTRIKES حول السعر.
+   يرجع {call, put, per} — per = تدفّق كل سترايك للعرض البصري. */
+function flowDiff(a,b,strikes){
+ if(!a||!b)return null;
+ let C=0,P2=0; const per=[];
+ for(const k of strikes){
+  const dc=Math.max(0,(a.c[k]||0)-(b.c[k]||0));
+  const dp=Math.max(0,(a.p[k]||0)-(b.p[k]||0));
+  C+=dc; P2+=dp; per.push({strike:+k,call:dc,put:dp});
+ }
+ return {call:C,put:P2,total:C+P2,per:per};
+}
 const SES={open:["var(--up)","rgba(45,212,160,.16)"],
            pre:["var(--wr)","rgba(255,181,71,.16)"],
            post:["var(--ac)","rgba(74,144,255,.16)"],
@@ -935,6 +1014,67 @@ function walls(el,list,col,tag){
   return `<span class="witem"><u style="color:${col}">${w.strike}</u>
    <s>${K(w.oi)}</s><s class="${w.in_target?"hit":""}">${d}</s></span>`;
  }).join("");
+}
+/* ══ [v1.4] لوحة تدفّق آخر 15 دقيقة ══
+   ما تقوله: أين تُتداول العقود **الآن** — لا منذ الافتتاح.
+   ⚠ لا تقول من المشتري ومن البائع (كل صفقة لها طرفان)، بل أين
+     تتركّز الحرارة. ⚠ عتبات النص مؤقتة حتى تتوفر مئينات حقيقية. */
+function renderFlow(d){
+ const el=document.getElementById("flow"); if(!el)return;
+ // النافذة: أقرب FSTRIKES فوق السعر وFSTRIKES تحته
+ const ab=d.table.filter(t=>t.side==="above").sort((a,b)=>a.dist-b.dist).slice(0,FSTRIKES);
+ const be=d.table.filter(t=>t.side==="below").sort((a,b)=>b.dist-a.dist).slice(0,FSTRIKES);
+ const win=[...be,...ab];
+ const cm={},pm={};
+ for(const t of d.table){cm[t.strike]=t.call_vol;pm[t.strike]=t.put_vol;}
+ const F=pushFlow(cm,pm);
+ const strikes=win.map(t=>String(t.strike));
+ const now=flowDiff(F.cur,F.r1,strikes);
+ const prev=F.r2?flowDiff(F.r1,F.r2,strikes):null;
+ const setTxt=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+ if(!now||now.total<=0){
+  document.getElementById("fnote").innerHTML=
+   F.r1?'<s style="color:var(--dim)">لا نشاط يُذكر في آخر 15 دقيقة</s>'
+       :'<s style="color:var(--dim)">جارٍ بناء النافذة — '
+        +Math.max(0,15-Math.round((F.n*FSTEP)/60000))+' دقيقة متبقية</s>';
+  document.getElementById("fbars").innerHTML="";
+  setTxt("fcall","—"); setTxt("fput","—"); setTxt("faccel","—");
+  return;
+ }
+ const cp=now.call/now.total*100;
+ setTxt("fcall",K(now.call)); setTxt("fput",K(now.put));
+ // التسارع: نافذة الآن ÷ النافذة السابقة لها مباشرة
+ let acc=null;
+ if(prev&&prev.total>0)acc=Math.round(now.total/prev.total*10)/10;
+ setTxt("faccel",acc==null?"—":acc+"×");
+ const ae=document.getElementById("faccel");
+ if(ae)ae.style.color=acc==null?"var(--dim)":(acc>=2?"var(--wr)":(acc>=1.3?"var(--tx)":"var(--dim)"));
+ // الملاحظة النصية — الاتجاه بصرياً قبل قراءة الأرقام
+ let note,col;
+ if(cp>=F_STRONG){note="نشاط CALL";col="var(--up)";}
+ else if(100-cp>=F_STRONG){note="نشاط PUT";col="var(--dn)";}
+ else if(Math.max(cp,100-cp)>=F_WEAK){
+  note=(cp>50?"ميل CALL":"ميل PUT")+" · تركيز منخفض";
+  col=cp>50?"rgba(45,212,160,.65)":"rgba(255,92,114,.65)";
+ }else{note="نشاط متوازن";col="var(--dim)";}
+ const dom=Math.max(cp,100-cp).toFixed(0);
+ const burst=(acc!=null&&acc>=2&&cp>=F_STRONG)||(acc!=null&&acc>=2&&(100-cp)>=F_STRONG);
+ document.getElementById("fnote").innerHTML=
+  `<span style="color:${col};font-weight:700">${burst?"⚡ ":""}${note} ${dom}%</span>`
+  +`<s style="color:var(--ft);font-weight:600"> · مؤقتة</s>`;
+ // الأشرطة لكل سترايك
+ const mx=Math.max(...now.per.map(x=>Math.max(x.call,x.put)),1);
+ document.getElementById("fbars").innerHTML=now.per
+  .slice().sort((a,b)=>b.strike-a.strike).map(x=>{
+   const above=x.strike>d.spot;
+   const wc=Math.round(100*x.call/mx),wp=Math.round(100*x.put/mx);
+   return `<div class="fr">
+    <span class="fs" style="color:${above?"#2dd4a0":"#ff5c72"}">${x.strike}</span>
+    <span class="fb"><i style="width:${wc}%;background:#2dd4a055"></i>
+     <b style="color:#2dd4a0">${x.call?K(x.call):""}</b></span>
+    <span class="fb"><i style="width:${wp}%;background:#ff5c7255"></i>
+     <b style="color:#ff5c72">${x.put?K(x.put):""}</b></span></div>`;
+  }).join("");
 }
 async function load(){
  const B=document.getElementById("body");
@@ -997,6 +1137,8 @@ async function load(){
   const rf=H.ref;
   for(const t of d.table){const pv=rf?rf[t.side+t.strike]:null;
    t.dp=(pv&&pv>0)?Math.round((t.main_vol-pv)/pv*1000)/10:null;}
+  // ══════ [v1.4] تدفّق آخر 15 دقيقة — 8 سترايكات فوق و8 تحت ══════
+  renderFlow(d);
   // ── تركّز النشاط: نسبة حجم أكبر خمسة تجمّعات فوق السعر إلى مجموعها ──
   // ⚠ «فوق/تحت» لا «كول/بوت»: التجمّع فوق السعر يُحسب كولاً بحكم التعريف
   //   لا باختيار السوق ⇒ هذا وصف تركّز نشاط، لا رأي اتجاهي.
@@ -1050,7 +1192,6 @@ async function load(){
       <span class="bv" style="color:#ff5c72">${K(t.put_vol)}</span></span>
     </span>
     <span class="cp" style="color:${crc}${cro}">${cr==null?"—":cr}</span>
-    <span class="vo ${t.vol_oi!=null&&t.vol_oi>=3?"fresh":""}">${VO(t.vol_oi)}</span>
     <span class="pp"><i style="color:#2dd4a0">${P(t.call_mid)}</i>
      <i style="color:#ff5c72">${P(t.put_mid)}</i></span>
     <span class="rt"><i class="${t.strike===pk?"big":""}">${K(t.main_oi)}</i>
@@ -1076,7 +1217,7 @@ async function load(){
     <span class="bar"><i style="width:${w}%;background:${col}33"></i>
      <b style="color:${col}">${K(c.vol)}</b></span>
     <span class="d ${hit?"hit":""}">${c.dist>0?"+":""}${c.dist.toFixed(1)}</span>
-    <span class="v ${c.vol_oi!=null&&c.vol_oi>=3?"fresh":""}">${VO(c.vol_oi)}</span>
+    <span class="v ${c.oi>=2000?"solid":(c.oi<500?"thin":"")}">${K(c.oi)}</span>
     <span class="g ${hot?"hot":""}">${gt}</span></div>`;
   }).join("");
  }catch(e){B.innerHTML=`<div class="err">⚠ ${e}</div>`;}
