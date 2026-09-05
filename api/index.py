@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.6)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.7)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
-  ── الجديد في v1.6 ──
+  ── الجديد في v1.7 ──
+  ㉕ [v1.7] العدّاد يحسب النطاق النشط لا السلّم كله
+     كان يجمع 16 سترايك فيعطي ~50/50 دائماً (السترايكان الملاصقان
+     للسعر يبتلعان كل شيء ويتعادلان) بينما الرأس يعرض النطاق النشط.
+     رقمان صحيحان لنطاقين مختلفين على شاشة واحدة. صار المصدر واحداً.
+
   ⑳ السلّم المركزي: السترايك في المنتصف · البوت يساراً والكول يميناً
      العين تنزل عموداً واحداً بلا مسح أفقي في كل صف.
      ⚠ مقياس الطول مشترك بين الجهتين (أطول شريط = 100%) — لو فُصل
@@ -945,7 +950,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
    <u id="fmc" style="background:#2dd4a0;width:50%"></u></div>
   <div class="fmmid"><s></s></div>
   <div class="fmfoot"><span id="fmacc">تسارع —</span>
-   <span>النطاق النشط مظلَّل · رتبة 3–8</span></div>
+   <span>العدّاد والأرقام: النطاق النشط · رتبة 3–8</span></div>
  </div>
 </div>
 
@@ -1102,7 +1107,13 @@ async function renderFlow(d){
 /* [v1.6] الرسم المشترك — يستعمله مسار البوت ومسار المتصفح معاً.
    المصدر واحد للتخطيط فلا ينحرف أحدهما عن الآخر مع الوقت.
    per = [{strike,call,put}] · spot = سعر الأداة لحظة اللقطة */
-function paintFlow(per, spot, acc){
+/* [v1.6.1] العدّاد يقرأ **النطاق النشط** لا السلّم كله.
+   العطل الذي أصلحه: كان يجمع الستة عشر سترايكاً فيظهر 50/50 بينما
+   البطاقات تقول 65/35. السترايكان الملاصقان للسعر (38k و33k) يبتلعان
+   الفارق ويسحبان النسبة إلى التعادل — وهو نفس سبب استبعادهما من
+   النطاق النشط أصلاً. عدّاد يُظهر التوازن حيث توجد إشارة أسوأ من
+   عدّاد لا يوجد. actC/actP يأتيان من المستدعي (نفس مصدر البطاقات). */
+function paintFlow(per, spot, acc, actC, actP){
  const F=document.getElementById("fbars"), M=document.getElementById("fmet");
  if(!per||!per.length){F.innerHTML="";if(M)M.style.display="none";return;}
  const rows=per.slice().sort((a,b)=>b.strike-a.strike);
@@ -1112,9 +1123,8 @@ function paintFlow(per, spot, acc){
  const ab=rows.filter(x=>x.strike>spot).map(x=>x.strike).sort((a,b)=>a-b);
  const be=rows.filter(x=>x.strike<=spot).map(x=>x.strike).sort((a,b)=>b-a);
  const rank=k=>((k>spot?ab:be).indexOf(k)+1);
- let h="",C=0,P=0;
+ let h="";
  rows.forEach((x,i)=>{
-  C+=x.call; P+=x.put;
   const up=x.strike>spot, rk=rank(x.strike), act=rk>=3&&rk<=8;
   const wc=Math.max(1,Math.round(100*x.call/mx));
   const wp=Math.max(1,Math.round(100*x.put/mx));
@@ -1132,6 +1142,15 @@ function paintFlow(per, spot, acc){
  F.innerHTML=h;
  // ── عدّاد الهيمنة ──
  if(!M)return;
+ // [v1.7] المصدر الوحيد: مجموعا النطاق النشط (رتبة 3–8) — نفس ما يعرضه
+ // الرأس والبطاقات. جمع السلّم كله كان يعطي ~50/50 دائماً لأن السترايكين
+ // الملاصقين للسعر يبتلعان كل شيء ويتعادلان (flow_bias_wide = +0.002).
+ let C=actC,P=actP;
+ if(C==null||P==null){
+  C=0;P=0;
+  rows.forEach(x=>{const r=rank(x.strike);
+   if(r>=3&&r<=8){C+=x.call;P+=x.put;}});
+ }
  const tot=C+P;
  if(tot<=0){M.style.display="none";return;}
  M.style.display="";
@@ -1171,7 +1190,7 @@ function drawFlow(sv,d,fromBot){
  document.getElementById("fnote").innerHTML=
   `<span style="color:${col};font-weight:700">${burst?"⚡ ":""}${note} ${dom}%</span>`
   +`<s style="color:var(--ft);font-weight:600"> · ${w}د · مؤقتة</s>`+ageTxt;
- paintFlow(sv.per_strike||[], sv.spot||d.spot, acc);
+ paintFlow(sv.per_strike||[], sv.spot||d.spot, acc, c, p);
 }
 /* الاحتياطي — حساب المتصفح (يعمل لو تعذّر البوت أو على SPY) */
 function drawFlowLocal(d){
@@ -1217,7 +1236,7 @@ function drawFlowLocal(d){
  document.getElementById("fnote").innerHTML=
   `<span style="color:${col};font-weight:700">${burst?"⚡ ":""}${note} ${dom}%</span>`
   +`<s style="color:var(--ft);font-weight:600"> · مؤقتة</s>`;
- paintFlow(now.per, d.spot, acc);
+ paintFlow(now.per, d.spot, acc, now.call, now.put);
 }
 async function load(){
  const B=document.getElementById("body");
