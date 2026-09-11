@@ -6,6 +6,21 @@
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
+  ── الجديد في v1.8 ──
+  ㉖ [v1.8] لوحة التموضع — GEX · فانّا · تشارم
+     الحجم يصف ما حدث. التموضع يصف ما **سيُجبَر** صنّاع السوق على فعله.
+     • GEX (غاما): هل التحوّط يكبح الحركة أم يضخّمها؟ ليست اتجاهية —
+       متماثلة بطبيعتها. تجيب: هل ستمتدّ أي حركة تبدأ أم تُبتلع؟
+     • فانّا (∂Δ/∂σ): حين يتحرّك التقلّب الضمني يتغيّر تحوّط المتعاملين
+       اتجاهياً. **اتجاهية** — وتعمل في نافذتنا الصباحية لأن VIX0D يتحرّك.
+     • تشارم (∂Δ/∂t): الدلتا تنحدر بمرور الوقت وحده فيُجبَر التحوّط على
+       التعديل. **اتجاهية** لكن أثرها يتركّز في آخر 90 دقيقة ⇒ خارج
+       نافذتنا غالباً. تُعرض للسياق لا للقيادة.
+     ⚠ يتطلب greeks=true في استعلام السلسلة (كان false).
+     ⚠ افتراض المتعامل (قصير الكول · طويل البوت) يصمد لخيارات المؤشرات
+       وينكسر في 0DTE ⇒ الأرقام حدّ أعلى لا حقيقة.
+     ⚠ وصف لا قرار — تماماً كبقية اللوحة.
+
   ── الجديد في v1.7 ──
   ㉕ [v1.7] العدّاد يحسب النطاق النشط لا السلّم كله
      كان يجمع 16 سترايك فيعطي ~50/50 دائماً (السترايكان الملاصقان
@@ -117,6 +132,7 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
+import math
 import os
 from datetime import datetime
 
@@ -321,6 +337,154 @@ def pick_expiration(q_sym):
     return future[0], "الجلسة القادمة"
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  [v1.8] التموضع — GEX · فانّا · تشارم
+# ═══════════════════════════════════════════════════════════════════════════
+#  المبدأ: صانع السوق محايد الدلتا يجب أن يعيد التحوّط كلما تغيّرت دلتا
+#  دفتره. وهي تتغيّر لثلاثة أسباب مستقلة:
+#     غاما  ← حركة السعر    (متماثلة ⇒ ليست اتجاهية)
+#     فانّا ← حركة التقلّب   (اتجاهية)
+#     تشارم ← مرور الوقت     (اتجاهية · تتركّز آخر 90 دقيقة)
+#
+#  الاصطلاح المعياري: المتعامل قصير الكول وطويل البوت ⇒ مساهمة الكول
+#  موجبة والبوت سالبة. يصمد جيداً لخيارات المؤشرات وينكسر في 0DTE،
+#  فتُقرأ النتيجة حدّاً أعلى لا حقيقة.
+#
+#  r = q = 0: على أفق ساعات، الفائدة والتوزيعات لا تُذكر. وبهذا الفرض
+#  يتساوى فانّا وتشارم للكول والبوت عند نفس السترايك (لأن دلتا البوت =
+#  دلتا الكول − 1، وثابت الطرح يختفي بالاشتقاق) — والفرق كله في الإشارة.
+
+def _norm_pdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def _bs_greeks(S, K, T, sig):
+    """يرجع (gamma, vanna, charm) لعقد واحد — r=q=0.
+
+       gamma = ∂²V/∂S²      · vanna = ∂Δ/∂σ  · charm = ∂Δ/∂t (سنوي)
+       يرجع None عند أي مدخل غير صالح بدل أن يرمي."""
+    try:
+        if S <= 0 or K <= 0 or T <= 0 or sig <= 0:
+            return None
+        v = sig * math.sqrt(T)
+        if v <= 1e-9:
+            return None
+        d1 = (math.log(S / K) + 0.5 * sig * sig * T) / v
+        d2 = d1 - v
+        ph = _norm_pdf(d1)
+        gamma = ph / (S * v)
+        vanna = -ph * d2 / sig
+        charm = ph * d2 / (2.0 * T)
+        return gamma, vanna, charm
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+
+
+def _time_to_exp(exp_str):
+    """سنوات حتى 16:00 نيويورك من تاريخ الانتهاء. أدنى حدّ 10 دقائق."""
+    try:
+        y, m, d = [int(x) for x in str(exp_str)[:10].split("-")]
+        end = datetime(y, m, d, 16, 0, 0, tzinfo=NY)
+        sec = (end - datetime.now(NY)).total_seconds()
+        return max(sec, 600.0) / (365.0 * 24.0 * 3600.0)
+    except Exception:
+        return 1.0 / 365.0
+
+
+def _positioning(rows, spot, exp_str):
+    """يحسب تعرّض المتعاملين. يرجع dict — أو None إن غابت الإغريق.
+
+       الوحدات: GEX بالدولار لكل حركة 1% · VEX بالدولار لكل نقطة تقلّب
+       واحدة · CHEX بالدولار لكل يوم يمرّ."""
+    try:
+        T = _time_to_exp(exp_str)
+        gex = vex = chex = 0.0
+        per = []
+        atm_iv = None
+        atm_d = float("inf")
+        for K, r in rows.items():
+            for typ, sgn in (("call", 1.0), ("put", -1.0)):
+                leg = r.get(typ) or {}
+                oi = _i(leg.get("oi"))
+                sig = _f(leg.get("iv"))
+                if oi <= 0 or sig <= 0:
+                    continue
+                g = _bs_greeks(spot, K, T, sig)
+                if g is None:
+                    continue
+                gm, vn, ch = g
+                notional = oi * 100.0
+                gex += sgn * gm * notional * spot * spot * 0.01
+                vex += sgn * vn * notional * spot * 0.01
+                chex += sgn * ch * notional * spot / 365.0
+                if typ == "call":
+                    per.append({"strike": K,
+                                "gex": sgn * gm * notional * spot * spot * 0.01})
+            dd = abs(K - spot)
+            if dd < atm_d:
+                cl = (r.get("call") or {}).get("iv")
+                pl = (r.get("put") or {}).get("iv")
+                ivs = [x for x in (cl, pl) if x]
+                if ivs:
+                    atm_d, atm_iv = dd, sum(ivs) / len(ivs)
+        if not per:
+            return None
+
+        # ── مستوى الانقلاب: السعر الذي يعبر عنده GEX الصافي الصفر ──
+        def gex_at(S):
+            t = 0.0
+            for K, r in rows.items():
+                for typ, sgn in (("call", 1.0), ("put", -1.0)):
+                    leg = r.get(typ) or {}
+                    oi = _i(leg.get("oi"))
+                    sig = _f(leg.get("iv"))
+                    if oi <= 0 or sig <= 0:
+                        continue
+                    g = _bs_greeks(S, K, T, sig)
+                    if g is None:
+                        continue
+                    t += sgn * g[0] * oi * 100.0 * S * S * 0.01
+            return t
+
+        flip = None
+        lo, hi = spot * 0.97, spot * 1.03
+        steps = 24
+        prev_S = lo
+        prev_v = gex_at(lo)
+        for i in range(1, steps + 1):
+            S = lo + (hi - lo) * i / steps
+            v = gex_at(S)
+            if prev_v is not None and v is not None and \
+               ((prev_v < 0 <= v) or (prev_v > 0 >= v)):
+                # تقريب خطّي بين النقطتين
+                if v != prev_v:
+                    flip = prev_S + (S - prev_S) * (0.0 - prev_v) / (v - prev_v)
+                else:
+                    flip = S
+                break
+            prev_S, prev_v = S, v
+
+        # ── الجدران: أكبر تجمّع GEX موجب فوق وأكبر سالب تحت ──
+        up = [x for x in per if x["strike"] > spot]
+        dn = [x for x in per if x["strike"] <= spot]
+        call_wall = max(up, key=lambda x: x["gex"])["strike"] if up else None
+        put_rows = [(K, (r.get("put") or {}).get("oi") or 0)
+                    for K, r in rows.items() if K <= spot]
+        put_wall = max(put_rows, key=lambda x: x[1])[0] if put_rows else None
+
+        return {
+            "gex": round(gex, 0), "vex": round(vex, 0), "chex": round(chex, 0),
+            "flip": round(flip, 2) if flip else None,
+            "flip_dist": round(spot - flip, 2) if flip else None,
+            "call_wall": call_wall, "put_wall": put_wall,
+            "atm_iv": round(atm_iv * 100, 1) if atm_iv else None,
+            "hours_left": round(T * 365 * 24, 2),
+        }
+    except Exception as e:
+        print("positioning err:", e)
+        return None
+
+
 def _walls(rows, spot):
     """أعلى ثلاثة OI فوق السعر وأعلى ثلاثة تحته — من نطاق ثابت ±WALL_RANGE_PCT.
 
@@ -374,8 +538,10 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
     else:
         exp, exp_tag = pick_expiration(q_sym)
 
+    # [v1.8] greeks=true — لازم لحساب GEX وفانّا وتشارم. يرجع
+    #        delta · gamma · theta · vega · mid_iv لكل عقد من ORATS.
     js, err = _get("/markets/options/chains",
-                   {"symbol": q_sym, "expiration": exp, "greeks": "false"})
+                   {"symbol": q_sym, "expiration": exp, "greeks": "true"})
     if err:
         return {"ok": False, "err": f"تعذّر جلب السلسلة: {err}",
                 "underlying": underlying, "expiration": exp}
@@ -391,6 +557,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         if strike <= 0 or typ not in ("call", "put"):
             continue
         bid, ask = _f(o.get("bid")), _f(o.get("ask"))
+        g = o.get("greeks") or {}
         rows.setdefault(strike, {"call": {}, "put": {}})[typ] = {
             "symbol": o.get("symbol"),
             "bid": bid, "ask": ask,
@@ -398,6 +565,9 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
             "spread": round(ask - bid, 3) if ask > 0 else None,
             "vol": _i(o.get("volume")),
             "oi": _i(o.get("open_interest")),
+            # [v1.8] الإغريق من ORATS عبر Tradier
+            "iv": _f(g.get("mid_iv")) or _f(g.get("smv_vol")) or None,
+            "delta": _f(g.get("delta")) if g.get("delta") is not None else None,
         }
 
     spot, spot_src, day_open, prev_close, day_high, day_low = _spot(
@@ -493,6 +663,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
     put_v = sum(t["put_vol"] for t in table)
 
     oi_up, oi_dn, wall_span = _walls(rows, spot)
+    pos = _positioning(rows, spot, exp)          # [v1.8]
 
     # [v1.3] التغيّر اليومي يُقاس من **إغلاق الأمس** لا من الافتتاح،
     #        وإلا اختفت الفجوة من الرقم تماماً. ويُعرض تغيّر الافتتاح بجانبه
@@ -534,6 +705,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
                 "side": pin["side"]} if pin else None,
         "call_vol_total": call_v, "put_vol_total": put_v,
         "pc_ratio": round(put_v / call_v, 2) if call_v else None,
+        "pos": pos,                                      # [v1.8] التموضع
         "delta_window": DELTA_WINDOW, "delta_ref_age": age,
         "total_vol": tot, "contracts": len(raw),
         "has_oi": any(t["call_oi"] or t["put_oi"] for t in table),
@@ -637,7 +809,7 @@ def debug(underlying="SPY"):
     q_sym = UNDERLYINGS.get(str(underlying).upper(), ("SPY",))[0]
     exp, _tag = pick_expiration(q_sym)
     js, err = _get("/markets/options/chains",
-                   {"symbol": q_sym, "expiration": exp, "greeks": "false"})
+                   {"symbol": q_sym, "expiration": exp, "greeks": "true"})
     if err:
         return {"ok": False, "err": err}
     raw = _listify(js.get("options") if isinstance(js, dict) else None, "option")
@@ -659,7 +831,8 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN),
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.8",
+            "positioning": True, "greeks": True,
             "symbols": list(UNDERLYINGS.keys()),
             "strikes": LIQ_STRIKES, "cache_sec": LIQ_CACHE_SEC,
             "delta_window": DELTA_WINDOW,
@@ -869,6 +1042,27 @@ body{margin:0;background:var(--bg);color:var(--tx);
  background:var(--tx);opacity:.55;transform:translateX(-50%)}
 .fmfoot{display:flex;justify-content:space-between;margin-top:8px;
  font-size:9.5px;color:var(--dim)}
+/* ── [v1.8] لوحة التموضع ── */
+.pos{background:var(--c1);border:1px solid var(--ln);border-radius:13px;
+ padding:8px 9px;margin-bottom:9px}
+.phd{display:flex;justify-content:space-between;align-items:center;
+ font-size:10px;color:var(--dim);margin-bottom:7px}
+.pvd{display:flex;align-items:center;justify-content:center;gap:8px;
+ padding:7px 6px;border-radius:10px;margin-bottom:7px;font-weight:700;
+ font-size:13px;letter-spacing:-.2px}
+.pvd s{text-decoration:none;font-size:10px;font-weight:600;opacity:.8}
+.p3{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.p1{background:rgba(255,255,255,.03);border-radius:9px;padding:6px 3px;
+ text-align:center}
+.p1 u{display:block;font-size:9px;color:var(--dim);text-decoration:none;
+ margin-bottom:3px}
+.p1 b{display:block;font-size:12px;font-weight:700;line-height:1.25}
+.p1 s{display:block;font-size:8.5px;text-decoration:none;color:var(--ft);
+ margin-top:2px}
+.plv{display:flex;justify-content:space-between;gap:6px;margin-top:7px;
+ padding-top:7px;border-top:1px solid rgba(33,43,60,.6);
+ font-size:9.5px;color:var(--dim)}
+.plv b{font-weight:700}
 .tbl{background:var(--c1);border:1px solid var(--ln);border-radius:15px;overflow:hidden}
 .hdr{display:grid;grid-template-columns:38px 1fr 32px 44px 36px;gap:4px;padding:6px 8px;
  font-size:8.5px;color:var(--dim);text-align:center;border-bottom:1px solid var(--ln)}
@@ -957,6 +1151,22 @@ body{margin:0;background:var(--bg);color:var(--tx);
 <div class="walls">
  <div class="wrow up" id="wup"><span class="wtag" style="color:var(--up)">▲ OI</span></div>
  <div class="wrow dn" id="wdn"><span class="wtag" style="color:var(--dn)">▼ OI</span></div>
+</div>
+
+<div class="pos" id="pos" style="display:none">
+ <div class="phd"><span>التموضع — ما سيُجبَر المتعاملون على فعله</span>
+  <span id="phrs"></span></div>
+ <div class="pvd" id="pvd"><span>—</span></div>
+ <div class="p3">
+  <div class="p1"><u>غاما · النظام</u><b id="pg">—</b><s id="pgs">—</s></div>
+  <div class="p1"><u>فانّا · التقلّب</u><b id="pv2">—</b><s id="pvs">—</s></div>
+  <div class="p1"><u>تشارم · الوقت</u><b id="pc2">—</b><s id="pcs">—</s></div>
+ </div>
+ <div class="plv">
+  <span>الانقلاب <b id="pflip">—</b></span>
+  <span>جدار الكول <b id="pcw" style="color:var(--up)">—</b></span>
+  <span>جدار البوت <b id="ppw" style="color:var(--dn)">—</b></span>
+ </div>
 </div>
 
 <div class="tbl">
@@ -1238,6 +1448,104 @@ function drawFlowLocal(d){
   +`<s style="color:var(--ft);font-weight:600"> · مؤقتة</s>`;
  paintFlow(now.per, d.spot, acc, now.call, now.put);
 }
+/* ══ [v1.8] لوحة التموضع ══
+   ثلاثة أسباب مستقلة تُجبر صانع السوق على التحوّط:
+     غاما  ← حركة السعر   ⇒ نظام (كبح/تضخيم) · ليست اتجاهية
+     فانّا ← حركة التقلّب  ⇒ اتجاهية · تعمل في نافذتنا الصباحية
+     تشارم ← مرور الوقت    ⇒ اتجاهية · تتركّز آخر 90 دقيقة
+   ⚠ الحكم النهائي يجمع الثلاثة: الاتجاه من فانّا وتشارم،
+     وقوّته من الغاما (السالبة تمدّد الحركة · الموجبة تبتلعها). */
+const IVK="liq_iv_"+U;
+const IV_WIN=300000;      // نافذة قياس تغيّر التقلّب: 5 دقائق
+function pushIV(v){
+ let h; try{h=JSON.parse(localStorage.getItem(IVK))||[]}catch(e){h=[]}
+ const now=Date.now();
+ if(v!=null&&(!h.length||now-h[h.length-1].t>20000))h.push({t:now,v:v});
+ h=h.filter(x=>now-x.t<3600000);
+ try{localStorage.setItem(IVK,JSON.stringify(h))}catch(e){}
+ let ref=null;
+ for(const x of h){if(now-x.t>=IV_WIN)ref=x;else break;}
+ if(!ref||v==null)return null;
+ return Math.round((v-ref.v)*10)/10;      // فرق بنقاط التقلّب
+}
+const MN=v=>{
+ if(v==null)return "—";
+ const a=Math.abs(v);
+ if(a>=1e9)return (v/1e9).toFixed(1)+"B";
+ if(a>=1e6)return (v/1e6).toFixed(0)+"M";
+ if(a>=1e3)return (v/1e3).toFixed(0)+"K";
+ return v.toFixed(0);
+};
+function renderPos(d){
+ const el=document.getElementById("pos"); if(!el)return;
+ const P0=d.pos;
+ if(!P0||P0.gex==null){el.style.display="none";return;}
+ el.style.display="";
+ const g=P0.gex, vx=P0.vex, ch=P0.chex, spot=d.spot;
+ const dIV=pushIV(P0.atm_iv);          // تغيّر التقلّب خلال 5 دقائق
+
+ // ① الغاما — نظام لا اتجاه
+ const neg=g<0;
+ document.getElementById("pg").innerHTML=
+  `<span style="color:${neg?"var(--dn)":"var(--up)"}">${neg?"سالبة":"موجبة"}</span>`;
+ document.getElementById("pgs").textContent=
+  (neg?"الحركة تمتدّ":"الحركة تُبتلع")+" · "+MN(Math.abs(g));
+
+ // ② فانّا — الاتجاه يعتمد على اتجاه التقلّب نفسه
+ //    VEX>0 ⇒ ارتفاع التقلّب يرفع دلتا الدفتر فيبيع المتعامل، والعكس
+ let vTxt="—",vCol="var(--dim)",vSub="التقلّب ثابت",vScore=0;
+ if(dIV!=null&&Math.abs(dIV)>=0.3&&vx){
+  const buy=(vx>0&&dIV<0)||(vx<0&&dIV>0);
+  vScore=buy?1:-1;
+  vTxt=buy?"↑ شراء":"↓ بيع";
+  vCol=buy?"var(--up)":"var(--dn)";
+  vSub=(dIV<0?"التقلّب ↓":"التقلّب ↑")+" "+Math.abs(dIV).toFixed(1);
+ }else if(dIV!=null){vSub="التقلّب "+(dIV>0?"+":"")+dIV;}
+ document.getElementById("pv2").innerHTML=`<span style="color:${vCol}">${vTxt}</span>`;
+ document.getElementById("pvs").textContent=vSub;
+
+ // ③ تشارم — CHEX موجب ⇒ دلتا الدفتر ترتفع بمرور الوقت ⇒ بيع
+ let cTxt="—",cCol="var(--dim)",cScore=0;
+ if(ch){
+  const buy=ch<0; cScore=buy?1:-1;
+  cTxt=buy?"↑ شراء":"↓ بيع";
+  cCol=buy?"var(--up)":"var(--dn)";
+ }
+ // وزن تشارم يكبر في آخر 90 دقيقة
+ const late=P0.hours_left!=null&&P0.hours_left<=1.5;
+ document.getElementById("pc2").innerHTML=`<span style="color:${cCol}">${cTxt}</span>`;
+ document.getElementById("pcs").textContent=
+  (late?"⚡ الوقت الفعّال":"أثره ضعيف الآن")+" · "+MN(Math.abs(ch));
+ document.getElementById("phrs").innerHTML=
+  P0.hours_left!=null?`<s style="color:var(--ft)">${P0.hours_left.toFixed(1)}س حتى الانتهاء</s>`:"";
+
+ // ④ الحكم المجمَّع
+ const score=vScore+(late?cScore:cScore*0.4);
+ let vd,bg,fg;
+ if(Math.abs(score)<0.5){
+  vd=neg?"تضخيم · بلا ميل":"كبح · بلا ميل";
+  bg=neg?"rgba(255,181,71,.13)":"rgba(255,255,255,.05)"; fg="var(--dim)";
+ }else if(score>0){
+  vd=(neg?"تضخيم":"كبح")+" · ميل CALL";
+  bg="rgba(45,212,160,.14)"; fg="var(--up)";
+ }else{
+  vd=(neg?"تضخيم":"كبح")+" · ميل PUT";
+  bg="rgba(255,92,114,.14)"; fg="var(--dn)";
+ }
+ const strength=neg?"ضغط ممتدّ":"ضغط مكبوح";
+ const pv=document.getElementById("pvd");
+ pv.style.background=bg; pv.style.color=fg;
+ pv.innerHTML=`<span>${vd}</span><s>${strength}</s>`;
+
+ // ⑤ المستويات
+ const fl=document.getElementById("pflip");
+ if(P0.flip){
+  const dd=P0.flip_dist;
+  fl.innerHTML=`${P0.flip.toFixed(0)} <s style="text-decoration:none;color:${dd>=0?"var(--up)":"var(--dn)"}">(${dd>0?"+":""}${dd.toFixed(0)})</s>`;
+ }else fl.textContent="خارج ±3%";
+ document.getElementById("pcw").textContent=P0.call_wall?P0.call_wall.toFixed(0):"—";
+ document.getElementById("ppw").textContent=P0.put_wall?P0.put_wall.toFixed(0):"—";
+}
 async function load(){
  const B=document.getElementById("body");
  try{
@@ -1301,6 +1609,7 @@ async function load(){
    t.dp=(pv&&pv>0)?Math.round((t.main_vol-pv)/pv*1000)/10:null;}
   // ══════ [v1.6] تدفّق آخر 15 دقيقة — 8 سترايكات فوق و8 تحت ══════
   renderFlow(d).catch(e=>console.log("flow",e));
+  try{renderPos(d);}catch(e){console.log("pos",e);}
   // ── تركّز النشاط: نسبة حجم أكبر خمسة تجمّعات فوق السعر إلى مجموعها ──
   // ⚠ «فوق/تحت» لا «كول/بوت»: التجمّع فوق السعر يُحسب كولاً بحكم التعريف
   //   لا باختيار السوق ⇒ هذا وصف تركّز نشاط، لا رأي اتجاهي.
