@@ -7,6 +7,12 @@
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㉗ [v1.8.1] إصلاح جدار البوت
+     كان يأخذ أكبر OI في السلسلة كلها بلا وزن ولا نطاق ⇒ التقط 6000
+     على SPX عند 7590 (21% تحت السعر) — سترايك تحوّط بعيد لا جدار
+     تداولي. جدار الكول نجا صدفةً لأنه موزون بـGEX والغاما تتلاشى
+     بعيداً عن السعر. الآن كلاهما بمقياس GEX وداخل WALL_NEAR_PCT.
+
   ㉖ [v1.8] لوحة التموضع — GEX · فانّا · تشارم
      الحجم يصف ما حدث. التموضع يصف ما **سيُجبَر** صنّاع السوق على فعله.
      • GEX (غاما): هل التحوّط يكبح الحركة أم يضخّمها؟ ليست اتجاهية —
@@ -154,6 +160,10 @@ LIQ_CACHE_SEC = float(os.getenv("LIQ_CACHE_SEC", "4"))
 
 # نطاق شريط الجدران: ±نسبة مئوية من السعر — ثابت ومستقل عن عدد السترايكات
 WALL_RANGE_PCT = float(os.getenv("WALL_RANGE_PCT", "0.5"))
+
+# [v1.8.1] نطاق جداري GEX — أوسع من شريط OI لأن الجدار قد يبعد عن السعر،
+#          لكنه محدود وإلا التُقطت سترايكات التحوّط البعيدة بلا معنى تداولي.
+WALL_NEAR_PCT = float(os.getenv("WALL_NEAR_PCT", "1.5"))
 
 # شريحة الهدف: الحركة اللازمة لبلوغ TP1 +35% (5–13 نقطة SPX من عيّنات المشروع)
 TARGET_LO_PCT = float(os.getenv("TARGET_LO_PCT", "0.04"))
@@ -414,12 +424,11 @@ def _positioning(rows, spot, exp_str):
                     continue
                 gm, vn, ch = g
                 notional = oi * 100.0
-                gex += sgn * gm * notional * spot * spot * 0.01
+                g_d = sgn * gm * notional * spot * spot * 0.01
+                gex += g_d
                 vex += sgn * vn * notional * spot * 0.01
                 chex += sgn * ch * notional * spot / 365.0
-                if typ == "call":
-                    per.append({"strike": K,
-                                "gex": sgn * gm * notional * spot * spot * 0.01})
+                per.append({"strike": K, "typ": typ, "gex": g_d})
             dd = abs(K - spot)
             if dd < atm_d:
                 cl = (r.get("call") or {}).get("iv")
@@ -464,13 +473,20 @@ def _positioning(rows, spot, exp_str):
                 break
             prev_S, prev_v = S, v
 
-        # ── الجدران: أكبر تجمّع GEX موجب فوق وأكبر سالب تحت ──
-        up = [x for x in per if x["strike"] > spot]
-        dn = [x for x in per if x["strike"] <= spot]
+        # ── الجداران: بوزن GEX لا بـOI الخام، وداخل نطاق WALL_NEAR_PCT ──
+        #  ⚠ عطل v1.8.0: جدار البوت كان يأخذ أكبر OI في السلسلة كلها بلا
+        #    وزن ولا نطاق، فالتقط سترايك تحوّط بعيداً (6000 على SPX عند
+        #    7590 = 21% تحت السعر). جدار الكول نجا صدفةً لأن GEX يوزن
+        #    بالغاما وهي تتلاشى بعيداً عن السعر. الآن الاثنان بنفس
+        #    المقياس: أكبر مساهمة كول موجبة فوق، وأكبر مساهمة بوت
+        #    سالبة تحت — وكلاهما داخل نطاق قابل للتداول.
+        span = spot * WALL_NEAR_PCT / 100.0
+        up = [x for x in per if x["typ"] == "call"
+              and 0 < x["strike"] - spot <= span]
+        dn = [x for x in per if x["typ"] == "put"
+              and 0 <= spot - x["strike"] <= span]
         call_wall = max(up, key=lambda x: x["gex"])["strike"] if up else None
-        put_rows = [(K, (r.get("put") or {}).get("oi") or 0)
-                    for K, r in rows.items() if K <= spot]
-        put_wall = max(put_rows, key=lambda x: x[1])[0] if put_rows else None
+        put_wall = min(dn, key=lambda x: x["gex"])["strike"] if dn else None
 
         return {
             "gex": round(gex, 0), "vex": round(vex, 0), "chex": round(chex, 0),
