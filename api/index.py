@@ -1,12 +1,31 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.7)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.8.3)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㉙ [v1.8.3] عميل HTTP مشترك — يوقف بناء سياق SSL في كل نداء
+     نفس إصلاح server وliq وtradier. على Vercel الأثر أصغر (الدوال
+     قصيرة العمر) لكن المكسب حقيقي في النداءات المتتالية داخل الطلب
+     الواحد: السلسلة والسعر وVIX وVIX0D — أربعة نداءات لكل /snap.
+     ⚠ صفر تغيير في أي حساب أو عرض.
+
+  ㉘ [v1.8.2] أرقام التموضع تُصدَّر مع اللقطة — كانت تُعرض وتُرمى
+     العطل: snapshot_row لا يُخرج gex ولا vex ولا مستوى الانقلاب، مع أن
+     fetch() يحسبها ويرجعها في مفتاح "pos" منذ v1.8. فكانت اللوحة تعرضها
+     كل خمس ثوانٍ ولا يصل منها شيء إلى قاعدة بيانات البوت.
+     الأثر: سؤال «هل بُعد السعر عن الانقلاب يفصل الرابح من الخاسر؟» و
+     «هل تغيّر vex يسبق حركة SPY أم يتبعها؟» لا يُجابان بالنظر — يحتاجان
+     سلسلة زمنية، ولا سلسلة بلا حفظ.
+     الإصلاح: تمرير تسعة حقول من pos إلى مخرجات snapshot_row.
+     ⚠ تمرير لا حساب: صفر نداءات إضافية لـTradier · صفر أرقام جديدة ·
+       صفر تغيير في اللوحة أو في أي قرار. الأرقام محسوبة أصلاً وتُهمل.
+     ⚠ يقابله liq v2.4 — وهو إلزامي: save() يبني الـINSERT من LIQ_COLS
+       حرفياً، فأي مفتاح خارج القائمة يُرمى بصمت بلا رسالة خطأ.
+
   ㉗ [v1.8.1] إصلاح جدار البوت
      كان يأخذ أكبر OI في السلسلة كلها بلا وزن ولا نطاق ⇒ التقط 6000
      على SPX عند 7590 (21% تحت السعر) — سترايك تحوّط بعيد لا جدار
@@ -140,6 +159,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 import math
 import os
+import threading
 from datetime import datetime
 
 import httpx
@@ -194,6 +214,60 @@ HIST_KEEP_SEC = 1800
 DELTA_WINDOW = 300  # نافذة التغيّر بالثواني (5 دقائق) — متدحرجة
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  [v1.8.3] عميل HTTP مشترك — إصلاح تسرّب الذاكرة
+# ═══════════════════════════════════════════════════════════════════════════
+#  العطل (17 سبتمبر 2026): منحنى ذاكرة Render سنّ منشار — يتسلّق من 15%
+#  إلى 100% ثم يسقط، سبع مرات في 12 ساعة. السقوط ليس تحريراً بل قتل
+#  العملية عند 512MB وإعادة تشغيلها.
+#  السبب: كل نداء بصيغة httpx.get(...) يبني عميلاً **وسياق SSL** جديدين
+#  ويتركهما للـGC. سياق SSL يزن مئات الكيلوبايتات، والاتصال لا يُعاد
+#  استخدامه. القياس: ~1.4MB لكل دورة استطلاع، والتسرّب يتناسب مع عدد
+#  الطلبات لا عدد الصفقات — وهو ما يفسّر تسارع المنحنى بعد الافتتاح.
+#  ⚠ الخطر تداولي لا تقني فقط: إعادة التشغيل تقتل مؤقّت الدورة الفرعية،
+#    فيتوقّف تتبّع الوقف المتحرك حتى وصول /poll التالي.
+#
+#  الإصلاح: عميل واحد يُبنى مرة ويُعاد استخدامه. الذاكرة تستقر، ومصافحة
+#  TLS تسقط من كل نداء (keep-alive) فتقلّ زمن الاستجابة أيضاً.
+#  ⚠ صفر تغيير في السلوك: المهلة تبقى تُمرَّر لكل نداء على حدة، والردود
+#    ومعالجة الأخطاء كما هي حرفياً.
+
+_HTTP_LIMITS = httpx.Limits(max_keepalive_connections=4,
+                            max_connections=8,
+                            keepalive_expiry=30.0)
+_HTTP = {"c": None}
+_HTTP_LOCK = threading.Lock()
+
+
+def _http():
+    """العميل المشترك — يُبنى عند أول نداء فقط."""
+    c = _HTTP["c"]
+    if c is None:
+        with _HTTP_LOCK:
+            if _HTTP["c"] is None:
+                _HTTP["c"] = httpx.Client(timeout=TD_TIMEOUT,
+                                          limits=_HTTP_LIMITS,
+                                          headers={"User-Agent": "spx-liqboard/1.8.3"})
+            c = _HTTP["c"]
+    return c
+
+
+def _http_reset():
+    """يغلق العميل ويُجبر بناء واحد جديد عند النداء التالي.
+
+       يُستدعى عند خطأ نقل (اتصال مقطوع · مهلة · TLS) حتى لا يعلق البوت
+       على عميل تالف. الإغلاق يحرّر الاتصالات فوراً بدل انتظار الـGC."""
+    with _HTTP_LOCK:
+        c = _HTTP["c"]
+        _HTTP["c"] = None
+    if c is not None:
+        try:
+            c.close()
+        except Exception:
+            pass
+
+
 def _f(x, d=0.0):
     try:
         return float(x)
@@ -212,13 +286,16 @@ def _get(path, params):
     if not TD_TOKEN:
         return None, "TRADIER_PROD_TOKEN غير مضبوط"
     try:
-        r = httpx.get(f"{TD_BASE}{path}", params=params, timeout=TD_TIMEOUT,
-                      headers={"Authorization": f"Bearer {TD_TOKEN}",
-                               "Accept": "application/json"})
+        r = _http().get(f"{TD_BASE}{path}", params=params, timeout=TD_TIMEOUT,
+                        headers={"Authorization": f"Bearer {TD_TOKEN}",
+                                 "Accept": "application/json"})
         if r.status_code != 200:
             return None, f"HTTP {r.status_code}: {r.text[:200]}"
         return r.json(), None
     except Exception as e:
+        # [v1.8.3] اتصال تالف ⇒ ابنِ عميلاً جديداً للنداء التالي
+        if isinstance(e, getattr(httpx, "TransportError", Exception)):
+            _http_reset()
         return None, f"{type(e).__name__}: {e}"
 
 
@@ -754,6 +831,11 @@ def snapshot_row(underlying="SPX", tag="", sig_key="", n=30):
     o_spot, _src, _op, _pc, _hi, _lo = _spot(UNDERLYINGS[other][1])
     ratio = round(spot / o_spot, 4) if o_spot else None
 
+    # [v1.8.2] التموضع — محسوب في fetch() ومهمَل حتى الآن.
+    #   يبقى None كاملاً إن غابت الإغريق (greeks=false أو سلسلة بلا IV)
+    #   فلا ينكسر شيء — الحقول تُحفظ فارغة كبقية الحقول الاختيارية.
+    p = d.get("pos") or {}
+
     return {
         "ok": True,
         "ts_ny": datetime.now(NY).strftime("%Y-%m-%d %H:%M:%S"),
@@ -785,6 +867,23 @@ def snapshot_row(underlying="SPX", tag="", sig_key="", n=30):
         "atm_strike": atm["strike"] if atm else None,
         "atm_cp_ratio": atm["cp_ratio"] if atm else None,
         "atm_cp_weak": atm["cp_weak"] if atm else None,
+        # ── [v1.8.2] التموضع — ما سيُجبَر المتعاملون على فعله ──
+        #  gex  نظام الحركة: سالب يمدّها · موجب يبتلعها
+        #  vex  تعرّض الفانّا — اتجاهي، يعمل حين يتحرّك VIX0D
+        #  chex تعرّض التشارم — اتجاهي، أثره في آخر 90 دقيقة
+        #  flip / flip_dist  مستوى انقلاب الغاما وبُعد السعر عنه
+        #  call_wall / put_wall  جداران بوزن GEX — غير جداري OI أعلاه
+        #  atm_iv  التقلّب الضمني عند السعر — يلزم لقياس تغيّره لاحقاً
+        #  hours_left  ساعات حتى الانتهاء — وزن التشارم يتبعها
+        "gex": p.get("gex"),
+        "vex": p.get("vex"),
+        "chex": p.get("chex"),
+        "flip": p.get("flip"),
+        "flip_dist": p.get("flip_dist"),
+        "call_wall": p.get("call_wall"),
+        "put_wall": p.get("put_wall"),
+        "atm_iv": p.get("atm_iv"),
+        "hours_left": p.get("hours_left"),
         # ── الخام: يسمح بإعادة الحساب بأي تعريف لاحق بلا جمع جديد ──
         "cols": "strike,call_vol,put_vol,call_oi,put_oi",
         "table_json": [[t["strike"], t["call_vol"], t["put_vol"],
@@ -816,6 +915,13 @@ def snap_text(row):
     if row.get("atm_strike"):
         w = " (ضعيف)" if row.get("atm_cp_weak") else ""
         L.append(f"ATM {row['atm_strike']} · كول/بوت {row['atm_cp_ratio']}{w}")
+    if row.get("gex") is not None:
+        g = row["gex"]
+        reg = "سالبة ⇒ الحركة تمتدّ" if g < 0 else "موجبة ⇒ الحركة تُبتلع"
+        L.append(f"غاما {reg}")
+        if row.get("flip") is not None:
+            L.append(f"الانقلاب {row['flip']:g} · البُعد "
+                     f"{row.get('flip_dist'):+g}")
     L.append(f"🕐 {row['ts_ny']} NY")
     return "\n".join(L)
 
@@ -847,8 +953,10 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.8",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.8.3",
             "positioning": True, "greeks": True,
+            "pos_in_snapshot": True,          # [v1.8.2]
+            "shared_client": True,            # [v1.8.3]
             "symbols": list(UNDERLYINGS.keys()),
             "strikes": LIQ_STRIKES, "cache_sec": LIQ_CACHE_SEC,
             "delta_window": DELTA_WINDOW,
