@@ -1,12 +1,38 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.8.3)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.9.1)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㉛ [v1.9.1] شريط المسيطر يُحفظ في المتصفح (مفتاح لكل أداة) — ينجو من
+     إعادة التحميل وقفل الجوال. ⚠ لا يملأ الفراغ: ما لم تكن الصفحة مفتوحة
+     لا يُرى تداوله، فيُعرض «مغطّى X من 5 د» بدل ادّعاء نافذة كاملة.
+     الحل الكامل (جمع دائم من الخادم) يأتي مع liq.
+     + تخطيط متجاوب: عمود واحد على الجوال · عمود مركزي على اللابتوب.
+
+  ㉚ [v1.9] «قراءة اللحظة» — قسم واحد في أعلى اللوحة بثلاثة أرقام خام
+     ① المسيطر آخر 5 دقائق: كل عقد يُقارَن سعر آخر صفقة فيه بالعرض والطلب
+        في اللقطة السابقة (قاعدة لي-ريدي). قرب الطلب = مشترٍ · قرب العرض =
+        بائع · المنتصف لا يُصنَّف. يُحسب في المتصفح لأن Vercel بلا حالة.
+        ⚠ غير مختبَر — يُعرض ويُسجَّل لاحقاً عبر liq قبل أي اعتماد.
+     ② بوابة الدخول: بُعد SPY عن VWAP. الوحيد المسنود بصفقاتنا: 44 صفقة ·
+        ≤$0.40 فوز 63% · أبعد 18%. ⚠ العتبة اختيرت بعد رؤية البيانات
+        (من 4 عتبات) وتُحسم على صفقات 21–30 سبتمبر. SPX بلا حجم ⇒ VWAP من
+        SPY دائماً، والمسافة تُحوَّل لنقاط SPX بنسبة السعرين.
+        الحساب مطابق للمحاكاة: السعر النموذجي + تقييد الحجم الشاذ بخمسة
+        أضعاف الوسيط (صفقات كتل مُبلَّغ عنها متأخرة كانت تشوّه VWAP).
+     ③ حدّا اليوم: السعر ± السعر × VIX1D × √(الساعات المتبقية ÷ 1638).
+        محاكاة 1,008 لقطة (4–18 سبتمبر): الإغلاق داخله 93% · المسار كله
+        86% · سقط يوم الفدرالي. وسيط ما يبلغه السعر 21–32% منه ⇒ حدود لا أهداف.
+     الجداران والانقلاب يظهران في السلّم بوسم «غير مختبَر» — محاكاة جدران
+     OI صمدت 56% = نفس المستويات العشوائية كل 25 نقطة.
+     ④ ساعة السوق من Tradier: اللوحة سجّلت لقطات يوم عطلة 7 سبتمبر بسعر
+        ثابت. الحالة الآن تُصحَّح من /markets/clock (يسقط بصمت للحساب المحلي).
+     ⚠ صفر تغيير في أي حساب قائم أو في /snap — الحقول الجديدة إضافية فقط.
+
   ㉙ [v1.8.3] عميل HTTP مشترك — يوقف بناء سياق SSL في كل نداء
      نفس إصلاح server وliq وtradier. على Vercel الأثر أصغر (الدوال
      قصيرة العمر) لكن المكسب حقيقي في النداءات المتتالية داخل الطلب
@@ -203,6 +229,17 @@ VIX1D_SYMBOL = os.getenv("VIX1D_SYMBOL", "VIX0D")
 # دون هذا العدد من العقود على أضعف الجانبين تُعدّ نسبة كول/بوت بلا مضمون
 CP_MIN_SIDE = int(os.getenv("CP_MIN_SIDE", "1000"))
 
+# [v1.9] بوابة الدخول: أقصى بُعد لـSPY عن VWAP في اتجاه الصفقة (دولار SPY)
+VWAP_GATE_SPY = float(os.getenv("VWAP_GATE_SPY", "0.40"))
+# تقييد حجم الشمعة الشاذة: أضعاف وسيط أحجام شموع اليوم
+VWAP_CAP_MULT = float(os.getenv("VWAP_CAP_MULT", "5"))
+VWAP_CACHE_SEC = 30.0
+_VWAP = {"ts": 0.0, "day": None, "val": None}
+_CLOCK = {"ts": 0.0, "val": None}
+CLOCK_CACHE_SEC = 60.0
+# ساعات جلسة كاملة × أيام تداول السنة — مقام VIX1D
+EM_YEAR_HOURS = 6.5 * 252
+
 _CACHE = {}
 _EXPS = {}          # {underlying: (ts, [تواريخ])}
 _VIX = {"ts": 0.0, "val": None}
@@ -369,8 +406,40 @@ def _spot_by_parity(rows):
     return round(best + (c - p), 2)
 
 
+def _market_clock():
+    """[v1.9] حالة السوق من Tradier — تكشف العطل وأيام الإغلاق المبكر.
+
+       يرجع open · premarket · postmarket · closed — أو None عند الفشل."""
+    now = datetime.now().timestamp()
+    if _CLOCK["val"] is not None and (now - _CLOCK["ts"]) < CLOCK_CACHE_SEC:
+        return _CLOCK["val"]
+    js, err = _get("/markets/clock", {})
+    st = None
+    if not err and isinstance(js, dict) and isinstance(js.get("clock"), dict):
+        st = str(js["clock"].get("state") or "").lower() or None
+    if st:
+        _CLOCK["ts"], _CLOCK["val"] = now, st
+    return st
+
+
 def session_state():
-    """حالة الجلسة بتوقيت نيويورك: قبل الافتتاح · مفتوح · بعد الإغلاق · عطلة."""
+    """حالة الجلسة بتوقيت نيويورك: قبل الافتتاح · مفتوح · بعد الإغلاق · عطلة.
+
+       [v1.9] الحساب المحلي يُصحَّح بساعة Tradier في اتجاه واحد فقط
+       (نحو الإغلاق): عطلة ⇒ مغلق · إغلاق مبكر ⇒ بعد الإغلاق."""
+    loc = _session_local()
+    try:
+        clk = _market_clock()
+    except Exception:
+        clk = None
+    if clk == "closed" and loc[0] != "closed":
+        return "closed", "السوق مغلق اليوم"
+    if clk == "postmarket" and loc[0] == "open":
+        return "post", "بعد الإغلاق"
+    return loc
+
+
+def _session_local():
     ny = datetime.now(NY)
     hm = ny.hour * 60 + ny.minute
     if ny.weekday() >= 5:
@@ -384,6 +453,107 @@ def session_state():
     if hm <= 20 * 60:
         return "post", "بعد الإغلاق"
     return "closed", "خارج التداول"
+
+
+def _vwap_calc(bars, cap_mult=None):
+    """[v1.9] VWAP الجلسة من شموع الدقيقة — بنفس طريقة المحاكاة حرفياً.
+
+       السعر النموذجي (أعلى+أدنى+إغلاق)÷3 · وحجم كل شمعة مقيَّد بـcap_mult
+       ضعف وسيط أحجام اليوم. يرجع (vwap, عدد الشموع, عدد المقيَّدة)."""
+    cap_mult = VWAP_CAP_MULT if cap_mult is None else cap_mult
+    rows = []
+    for b in bars or []:
+        if not isinstance(b, dict):
+            continue
+        v = _f(b.get("volume"))
+        h, l, c = _f(b.get("high")), _f(b.get("low")), _f(b.get("close"))
+        if v <= 0 or h <= 0 or l <= 0 or c <= 0:
+            continue
+        rows.append(((h + l + c) / 3.0, v))
+    if not rows:
+        return None, 0, 0
+    vs = sorted(v for _, v in rows)
+    m = len(vs)
+    med = vs[m // 2] if m % 2 else (vs[m // 2 - 1] + vs[m // 2]) / 2.0
+    cap = cap_mult * med if med > 0 else float("inf")
+    num = den = 0.0
+    capped = 0
+    for tp, v in rows:
+        if v > cap:
+            v, capped = cap, capped + 1
+        num += tp * v
+        den += v
+    if den <= 0:
+        return None, len(rows), capped
+    return num / den, len(rows), capped
+
+
+def _spy_vwap():
+    """[v1.9] VWAP الجلسة لـSPY من /markets/timesales — cache 30 ثانية.
+
+       SPX مؤشر بلا حجم ⇒ لا VWAP له. نحسبه من SPY دائماً."""
+    ny = datetime.now(NY)
+    day = ny.strftime("%Y-%m-%d")
+    now = datetime.now().timestamp()
+    if _VWAP["day"] == day and (now - _VWAP["ts"]) < VWAP_CACHE_SEC:
+        return _VWAP["val"]
+    js, err = _get("/markets/timesales",
+                   {"symbol": "SPY", "interval": "1min",
+                    "start": f"{day} 09:30",
+                    "end": ny.strftime("%Y-%m-%d %H:%M"),
+                    "session_filter": "open"})
+    if err or not isinstance(js, dict):
+        return _VWAP["val"] if _VWAP["day"] == day else None
+    bars = _listify(js.get("series"), "data")
+    vw, nb, nc = _vwap_calc(bars)
+    val = {"vwap": round(vw, 3), "bars": nb, "capped": nc} if vw else None
+    _VWAP["ts"], _VWAP["day"], _VWAP["val"] = now, day, val
+    return val
+
+
+def _vwap_block(underlying, spot):
+    """[v1.9] بوابة الدخول: بُعد SPY عن VWAP ومقابله بنقاط الأداة المعروضة."""
+    try:
+        vv = _spy_vwap()
+        if not vv:
+            return None
+        spy = spot if underlying == "SPY" else _spot("SPY")[0]
+        if not spy:
+            return None
+        ratio = (spot / spy) if underlying != "SPY" else 1.0
+        dist = spy - vv["vwap"]
+        return {
+            "vwap_spy": round(vv["vwap"], 2), "spy": round(spy, 2),
+            "dist_spy": round(dist, 2), "ratio": round(ratio, 4),
+            "dist_und": round(dist * ratio, 2),
+            "vwap_und": round(spot - dist * ratio, 2),
+            "gate": VWAP_GATE_SPY,
+            # CALL ممنوع إن كان السعر ممتداً فوق VWAP · PUT إن كان ممتداً تحته
+            "call_ok": dist <= VWAP_GATE_SPY,
+            "put_ok": -dist <= VWAP_GATE_SPY,
+            "bars": vv["bars"], "capped": vv["capped"],
+        }
+    except Exception as e:
+        print("vwap err:", e)
+        return None
+
+
+def _expected_move(spot, iv_pct, ny=None):
+    """[v1.9] حدّا اليوم من التقلّب الضمني ليوم واحد.
+
+       em = السعر × IV × √(الساعات المتبقية حتى 16:00 ÷ 1638).
+       يرجع None خارج الجلسة أو بلا تقلّب."""
+    ny = ny or datetime.now(NY)
+    if not spot or not iv_pct or iv_pct <= 0:
+        return None
+    mins = 16 * 60 - (ny.hour * 60 + ny.minute) - ny.second / 60.0
+    if mins <= 0 or mins > 390:
+        return None
+    hrs = mins / 60.0
+    em = spot * iv_pct / 100.0 * math.sqrt(hrs / EM_YEAR_HOURS)
+    return {"em": round(em, 2), "hi": round(spot + em, 2),
+            "lo": round(spot - em, 2), "hours": round(hrs, 2),
+            "iv": round(iv_pct, 2)}
 
 
 def _expirations(q_sym, force=False):
@@ -656,6 +826,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
             "bid": bid, "ask": ask,
             "mid": round((bid + ask) / 2.0, 3) if ask > 0 else None,
             "spread": round(ask - bid, 3) if ask > 0 else None,
+            "last": _f(o.get("last")) or None,           # [v1.9] المسيطر
             "vol": _i(o.get("volume")),
             "oi": _i(o.get("open_interest")),
             # [v1.8] الإغريق من ORATS عبر Tradier
@@ -691,10 +862,12 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
             "call_mid": r["call"].get("mid"),
             "call_bid": r["call"].get("bid"), "call_ask": r["call"].get("ask"),
             "call_spread": r["call"].get("spread"),
+            "call_last": r["call"].get("last"),             # [v1.9]
             "put_vol": pv, "put_oi": r["put"].get("oi", 0),
             "put_mid": r["put"].get("mid"),
             "put_bid": r["put"].get("bid"), "put_ask": r["put"].get("ask"),
             "put_spread": r["put"].get("spread"),
+            "put_last": r["put"].get("last"),               # [v1.9]
             # نسبة الجانبين عند نفس السترايك — مرشّح ضوضاء لا مؤشر اتجاه:
             # القريب من 1 يعني تحوّطاً أو سبريداً ⇒ لا معلومة اتجاهية
             "cp_ratio": (round(cv / pv, 2) if pv else None),
@@ -758,6 +931,16 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
     oi_up, oi_dn, wall_span = _walls(rows, spot)
     pos = _positioning(rows, spot, exp)          # [v1.8]
 
+    # [v1.9] قراءة اللحظة — بوابة VWAP وحدّا اليوم
+    ses = session_state()
+    vwap = _vwap_block(underlying, spot) if ses[0] == "open" else None
+    v1d = _vix1d()
+    iv_src, iv_val = ("VIX1D", v1d) if v1d else \
+        (("ATM", pos.get("atm_iv")) if pos and pos.get("atm_iv") else (None, None))
+    em = _expected_move(spot, iv_val) if ses[0] == "open" else None
+    if em:
+        em["src"] = iv_src
+
     # [v1.3] التغيّر اليومي يُقاس من **إغلاق الأمس** لا من الافتتاح،
     #        وإلا اختفت الفجوة من الرقم تماماً. ويُعرض تغيّر الافتتاح بجانبه
     #        لأنه يجيب سؤالاً مختلفاً: أين السعر من بداية الجلسة؟
@@ -772,7 +955,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         "ok": True, "underlying": underlying, "expiration": exp,
         "exp_tag": exp_tag,
         "exp_disp": "-".join(reversed(exp.split("-"))),
-        "session": session_state()[0], "session_txt": session_state()[1],
+        "session": ses[0], "session_txt": ses[1],
         "ny_time": datetime.now(NY).strftime("%H:%M"),
         "spot": round(spot, 2), "spot_src": spot_src, "spacing": spacing,
         "day_open": round(day_open, 2) if day_open else None,
@@ -799,6 +982,7 @@ def fetch(underlying="SPY", expiration=None, n=None, force=False):
         "call_vol_total": call_v, "put_vol_total": put_v,
         "pc_ratio": round(put_v / call_v, 2) if call_v else None,
         "pos": pos,                                      # [v1.8] التموضع
+        "vwap": vwap, "em": em,                          # [v1.9]
         "delta_window": DELTA_WINDOW, "delta_ref_age": age,
         "total_vol": tot, "contracts": len(raw),
         "has_oi": any(t["call_oi"] or t["put_oi"] for t in table),
@@ -953,7 +1137,8 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.8.3",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.9.1",
+            "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
             "shared_client": True,            # [v1.8.3]
@@ -1220,6 +1405,38 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .chip s{display:block;font-size:10.5px;text-decoration:none;margin-top:3px;opacity:.9}
 .foot{margin-top:14px;font-size:9.5px;color:var(--ft);line-height:1.85;text-align:center}
 .err{padding:26px;text-align:center;color:var(--wr);font-size:13px}
+/* ── [v1.9] قراءة اللحظة ── */
+.now{background:var(--c1);border:1px solid var(--ln);border-radius:14px;padding:10px 10px 8px;margin-bottom:9px}
+.nhd{display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:var(--dim);margin-bottom:8px}
+.nhd b{color:var(--tx);font-size:12.5px;font-weight:700}
+.nsec{margin-bottom:10px}
+.nlb{display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--dim);margin-bottom:5px}
+.ntag{font-size:9px;padding:1px 6px;border-radius:6px;background:rgba(255,181,71,.13);color:var(--wr);font-weight:700}
+.ntag.ok{background:rgba(45,212,160,.13);color:var(--up)}
+.agb{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11.5px;font-weight:700}
+.agb u{display:flex;align-items:center;justify-content:center;text-decoration:none;transition:width .5s;white-space:nowrap;overflow:hidden}
+.agv{margin-top:7px;font-size:13px;font-weight:700;text-align:center}
+.ag4{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:7px}
+.ag4 span{font-size:10.5px;font-weight:600;padding:5px 7px;border-radius:8px;background:rgba(255,255,255,.035);display:flex;justify-content:space-between}
+.agf{margin-top:5px;font-size:9.5px;color:var(--ft);text-align:center}
+.gp{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.gp span{text-align:center;padding:7px 4px;border-radius:9px;font-size:12.5px;font-weight:700}
+.gtr{position:relative;height:6px;border-radius:3px;background:rgba(255,255,255,.06);margin:9px 0 3px}
+.gtr i{position:absolute;top:0;height:6px;background:rgba(45,212,160,.28);border-radius:3px}
+.gtr b{position:absolute;top:-4px;width:3px;height:14px;border-radius:2px;background:var(--tx);transform:translateX(50%);transition:right .5s}
+.gsc{display:flex;justify-content:space-between;font-size:9px;color:var(--ft)}
+.lad{border-top:1px solid rgba(33,43,60,.6);padding-top:6px}
+.lr{display:grid;grid-template-columns:64px 1fr 44px;gap:6px;align-items:center;padding:5px 2px;border-bottom:1px solid rgba(33,43,60,.45);font-size:11px}
+.lr:last-child{border-bottom:none}
+.lr b{font-weight:700;font-size:12px}
+.lr s{text-decoration:none;color:var(--dim);font-size:10px}
+.lr em{font-style:normal;text-align:left;font-size:10px;color:var(--dim)}
+.lr.px{background:rgba(74,144,255,.14);border-radius:7px}
+.lr.px b{color:#8ab6ff}
+/* [v1.9.1] لابتوب: عمود مركزي بعرض قراءة مريح بدل تمدّد الأشرطة على الشاشة كلها */
+@media (min-width:760px){body{max-width:720px;margin:0 auto;padding-left:18px;padding-right:18px}
+ .agb{height:30px;font-size:13px}.agv{font-size:14.5px}.lr{font-size:12px;padding:6px 4px}}
+@media (min-width:1200px){body{max-width:780px}}
 </style></head><body>
 
 <div class="hd">
@@ -1239,6 +1456,31 @@ body{margin:0;background:var(--bg);color:var(--tx);
   <span id="rhi">—</span></div>
  <div class="track"><span class="op" id="rop" style="display:none"></span>
   <span class="dot" id="rdot"></span></div>
+</div>
+
+<div class="now" id="now" style="display:none">
+ <div class="nhd"><b>قراءة اللحظة</b><span id="nts"></span></div>
+ <div class="nsec">
+  <div class="nlb"><span>المسيطر · آخر 5 دقائق</span><span class="ntag">غير مختبَر</span></div>
+  <div class="agb"><u id="agB" style="width:50%;background:#2dd4a0;color:#06251b">مشترون —</u>
+   <u id="agS" style="width:50%;background:#ff5c72;color:#2a060c">بائعون —</u></div>
+  <div class="agv" id="agV" style="color:var(--dim)">جارٍ البناء…</div>
+  <div class="ag4">
+   <span><s style="text-decoration:none;color:var(--up)">شراء CALL</s><b id="agCB">—</b></span>
+   <span><s style="text-decoration:none;color:var(--dn)">شراء PUT</s><b id="agPB">—</b></span>
+   <span><s style="text-decoration:none;color:var(--dim)">بيع PUT ↑</s><b id="agPS">—</b></span>
+   <span><s style="text-decoration:none;color:var(--dim)">بيع CALL ↓</s><b id="agCS">—</b></span>
+  </div>
+  <div class="agf" id="agF"></div>
+ </div>
+ <div class="nsec" id="gsec">
+  <div class="nlb"><span>بوابة الدخول · بُعد SPY عن VWAP</span><span class="ntag ok">مسنود · 44 صفقة</span></div>
+  <div class="gp"><span id="gC">CALL —</span><span id="gP">PUT —</span></div>
+  <div class="gtr"><i id="gZ"></i><b id="gM"></b></div>
+  <div class="gsc"><span id="gL">—</span><span id="gT">—</span><span id="gR">—</span></div>
+ </div>
+ <div class="nlb"><span>المستويات · الأقرب للسعر في الوسط</span><span id="lsrc"></span></div>
+ <div class="lad" id="lad"></div>
 </div>
 
 <div class="exp"><span>سلسلة العقود</span><b id="exp">…</b></div>
@@ -1670,6 +1912,117 @@ function renderPos(d){
  document.getElementById("pcw").textContent=P0.call_wall?P0.call_wall.toFixed(0):"—";
  document.getElementById("ppw").textContent=P0.put_wall?P0.put_wall.toFixed(0):"—";
 }
+/* ═══ [v1.9] قراءة اللحظة ═══
+   المسيطر: الحجم الجديد بين لقطتين يُنسب لجهة بمقارنة سعر آخر صفقة بالعرض
+   والطلب في اللقطة السابقة (قاعدة لي-ريدي). ≥60% من الفارق نحو الطلب =
+   مشترٍ · ≤40% = بائع · بينهما لا يُصنَّف. فجوة >30 ثانية بين لقطتين ⇒
+   لا نسب (لا نعرف متى تمّت الصفقات). الحالة في الذاكرة فقط: تبدأ من
+   الصفر عند فتح الصفحة، وتكتمل النافذة بعد 5 دقائق. */
+const AG_WIN=300000, AG_GAP=30000, AG_MIN=200;
+const AGK="liq_ag_"+U;           // [v1.9.1] حفظ لكل أداة على حدة
+let AG={prev:null,ev:[]};
+try{const o=JSON.parse(localStorage.getItem(AGK));if(o&&Array.isArray(o.ev))AG=o;}catch(e){}
+function agSave(){try{localStorage.setItem(AGK,JSON.stringify(AG));}catch(e){}}
+function aggUpdate(d,now){
+ const cur={};
+ for(const t of (d.table||[]))for(const s of ["call","put"])
+  cur[s[0]+t.strike]={v:t[s+"_vol"]||0,b:t[s+"_bid"],a:t[s+"_ask"],l:t[s+"_last"]};
+ const P=AG.prev;
+ if(P&&P.exp===d.expiration&&now-P.t<=AG_GAP&&now>P.t){
+  const e={t:now,dt:now-P.t,cb:0,cs:0,pb:0,ps:0,u:0};
+  for(const k in cur){
+   const c=cur[k],p=P.q[k]; if(!p)continue;
+   const dv=c.v-p.v; if(dv<=0)continue;
+   let b=p.b,a=p.a; if(!(a>b&&b>=0)){b=c.b;a=c.a;}
+   if(!(a>b&&b>=0)||c.l==null){e.u+=dv;continue;}
+   const x=(c.l-b)/(a-b), sd=k[0];
+   if(x>=0.6)e[sd+"b"]+=dv; else if(x<=0.4)e[sd+"s"]+=dv; else e.u+=dv;
+  }
+  AG.ev.push(e);
+ }else if(P&&P.exp!==d.expiration)AG.ev=[];   // انتهاء جديد ⇒ بداية نظيفة
+ // فجوة >30 ثانية (قفل الجوال): لا يُنسب حجمها لأحد، والأحداث السابقة تبقى
+ // ما دامت داخل الخمس دقائق — والتغطية تُعرض صراحة.
+ AG.prev={t:now,q:cur,exp:d.expiration};
+ AG.ev=AG.ev.filter(x=>now-x.t<=AG_WIN);
+ agSave();
+ const r={cb:0,cs:0,pb:0,ps:0,u:0,cov:0};
+ for(const e of AG.ev){for(const k of ["cb","cs","pb","ps","u"])r[k]+=e[k];r.cov+=(e.dt||5000);}
+ r.cov=Math.min(r.cov,AG_WIN);
+ return r;
+}
+function aggRead(r){
+ const cls=r.cb+r.cs+r.pb+r.ps, all=cls+r.u;
+ if(cls<AG_MIN)return {ready:false,cls,all,covMin:r.cov/60000};
+ const buy=r.cb+r.pb, bull=r.cb+r.ps;
+ const g=[["cb","مشترو CALL",1],["pb","مشترو PUT",-1],["ps","بائعو PUT",1],["cs","بائعو CALL",-1]]
+  .sort((x,y)=>r[y[0]]-r[x[0]])[0];
+ return {ready:true,cls,all,buyPct:buy/cls*100,bullPct:bull/cls*100,
+  lead:g[1],leadDir:g[2],covMin:r.cov/60000,leadPct:r[g[0]]/cls*100,cover:all?cls/all*100:0,
+  pct:{cb:r.cb/cls*100,cs:r.cs/cls*100,pb:r.pb/cls*100,ps:r.ps/cls*100}};
+}
+function buildLadder(d){
+ const L=[], P0=d.pos||{}, sp=d.spot;
+ if(d.em){L.push({p:d.em.hi,n:"حدّ اليوم ↑",t:"صمد 86–93%",c:"var(--dim)"});
+          L.push({p:d.em.lo,n:"حدّ اليوم ↓",t:"صمد 86–93%",c:"var(--dim)"});}
+ if(P0.call_wall)L.push({p:P0.call_wall,n:"جدار غاما CALL",t:"غير مختبَر",c:"var(--up)"});
+ if(P0.put_wall)L.push({p:P0.put_wall,n:"جدار غاما PUT",t:"غير مختبَر",c:"var(--dn)"});
+ if(P0.flip)L.push({p:P0.flip,n:"الانقلاب",t:sp>=P0.flip?"فوقه: كبح":"تحته: تضخيم",c:"var(--wr)"});
+ if(d.vwap)L.push({p:d.vwap.vwap_und,n:"VWAP",t:"من SPY",c:"var(--ac)"});
+ L.push({p:sp,n:"السعر",t:"",c:"",px:true});
+ return L.filter(x=>x.p!=null&&isFinite(x.p)).sort((a,b)=>b.p-a.p);
+}
+const F1=v=>(v>0?"+":"")+v.toFixed(Math.abs(v)<10?2:1);
+function renderNow(d){
+ const el=document.getElementById("now"); if(!el)return;
+ if(d.session!=="open"){el.style.display="none";return;}
+ el.style.display="";
+ document.getElementById("nts").textContent=d.ny_time+" NY";
+ // ① المسيطر
+ const a=aggRead(aggUpdate(d,Date.now()));
+ const B=document.getElementById("agB"),S=document.getElementById("agS"),V=document.getElementById("agV");
+ const cvT=" · مغطّى "+(a.covMin||0).toFixed(1)+" من 5 د";
+ if(!a.ready){
+  B.style.width=S.style.width="50%";B.textContent="مشترون —";S.textContent="بائعون —";
+  V.style.color="var(--dim)";V.textContent="جارٍ البناء… "+K(a.cls)+" عقد مصنّف"+cvT;
+  for(const k of ["CB","CS","PB","PS"])document.getElementById("ag"+k).textContent="—";
+  document.getElementById("agF").textContent="";
+ }else{
+  const bp=Math.round(a.buyPct);
+  B.style.width=Math.max(12,Math.min(88,bp))+"%";S.style.width=Math.max(12,Math.min(88,100-bp))+"%";
+  B.textContent="مشترون "+bp+"%";S.textContent="بائعون "+(100-bp)+"%";
+  const bu=Math.round(a.bullPct), dirTxt=bu>=55?"ضغط صعودي "+bu+"%":bu<=45?"ضغط هبوطي "+(100-bu)+"%":"متوازن";
+  V.style.color=bu>=55?"var(--up)":bu<=45?"var(--dn)":"var(--dim)";
+  V.textContent=a.lead+" يقودون · "+dirTxt;
+  document.getElementById("agCB").textContent=Math.round(a.pct.cb)+"%";
+  document.getElementById("agPB").textContent=Math.round(a.pct.pb)+"%";
+  document.getElementById("agPS").textContent=Math.round(a.pct.ps)+"%";
+  document.getElementById("agCS").textContent=Math.round(a.pct.cs)+"%";
+  document.getElementById("agF").textContent=K(a.cls)+" عقد مصنّف من "+K(a.all)+" ("+Math.round(a.cover)+"%)"+cvT;
+ }
+ // ② بوابة VWAP
+ const g=document.getElementById("gsec"), w=d.vwap;
+ if(!w){g.style.display="none";}else{
+  g.style.display="";
+  const on=(id,ok,lbl)=>{const e=document.getElementById(id);
+   e.style.background=ok?"rgba(45,212,160,.16)":"rgba(255,181,71,.15)";
+   e.style.color=ok?"var(--up)":"var(--wr)";e.textContent=lbl+" "+(ok?"مسموح":"انتظر");};
+  on("gC",w.call_ok,"CALL");on("gP",w.put_ok,"PUT");
+  const R=1.2, pos=v=>(Math.max(-R,Math.min(R,v))+R)/(2*R)*100;
+  const z=document.getElementById("gZ");
+  z.style.right=pos(-w.gate)+"%"; z.style.width=(pos(w.gate)-pos(-w.gate))+"%";
+  document.getElementById("gM").style.right=pos(w.dist_spy)+"%";
+  document.getElementById("gL").textContent="−$"+R.toFixed(2);
+  const pts=U==="SPX"?" · "+F1(w.dist_und)+" نقطة SPX":"";
+  document.getElementById("gT").textContent="SPY "+(w.dist_spy>=0?"فوق":"تحت")+" VWAP بـ $"+Math.abs(w.dist_spy).toFixed(2)+pts;
+  document.getElementById("gR").textContent="+$"+R.toFixed(2);
+ }
+ // ③ السلّم
+ const L=buildLadder(d);
+ document.getElementById("lsrc").textContent=d.em?("حدّا اليوم من "+d.em.src+" "+d.em.iv):"";
+ document.getElementById("lad").innerHTML=L.map(x=>x.px
+  ?`<div class="lr px"><b>${x.p.toFixed(2)}</b><s>${U} الآن</s><em></em></div>`
+  :`<div class="lr"><b style="color:${x.c}">${x.p.toFixed(x.p>1000?0:2)}</b><s>${x.n} · ${x.t}</s><em>${F1(x.p-d.spot)}</em></div>`).join("");
+}
 async function load(){
  const B=document.getElementById("body");
  try{
@@ -1734,6 +2087,7 @@ async function load(){
   // ══════ [v1.6] تدفّق آخر 15 دقيقة — 8 سترايكات فوق و8 تحت ══════
   renderFlow(d).catch(e=>console.log("flow",e));
   try{renderPos(d);}catch(e){console.log("pos",e);}
+  try{renderNow(d);}catch(e){console.log("now",e);}
   // ── تركّز النشاط: نسبة حجم أكبر خمسة تجمّعات فوق السعر إلى مجموعها ──
   // ⚠ «فوق/تحت» لا «كول/بوت»: التجمّع فوق السعر يُحسب كولاً بحكم التعريف
   //   لا باختيار السوق ⇒ هذا وصف تركّز نشاط، لا رأي اتجاهي.
