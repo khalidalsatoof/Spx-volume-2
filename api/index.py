@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.9.2)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.9.3)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㉝ [v1.9.3] ① /snap يُخرج بوابة VWAP وحدّي اليوم كحقول مسطّحة لتحفظها liq v2.7.
+     ② شريط المسيطر يقرأ من الخادم (/liq_agg — جامع كل 5 ثوانٍ على Render)
+        حين تكون تغطيته أكبر من تغطية المتصفح، ويسقط للمتصفح عند أي فشل.
+        الخادم يجمع SPX فقط ⇒ تبويب SPY يبقى على حساب المتصفح.
+
   ㉜ [v1.9.2] «قراءة اللحظة» تظهر دائماً: خارج الجلسة باهتة بوسم «خارج
      الجلسة» مع آخر قراءة محفوظة للمسيطر، بدل الإخفاء التام.
 
@@ -1071,6 +1076,16 @@ def snapshot_row(underlying="SPX", tag="", sig_key="", n=30):
         "put_wall": p.get("put_wall"),
         "atm_iv": p.get("atm_iv"),
         "hours_left": p.get("hours_left"),
+        # ── [v1.9.3] قراءة اللحظة — للحفظ في liq v2.7 ──
+        "vwap_spy": (d.get("vwap") or {}).get("vwap_spy"),
+        "vwap_dist_spy": (d.get("vwap") or {}).get("dist_spy"),
+        "vwap_dist_und": (d.get("vwap") or {}).get("dist_und"),
+        "vwap_call_ok": (d.get("vwap") or {}).get("call_ok"),
+        "vwap_put_ok": (d.get("vwap") or {}).get("put_ok"),
+        "em_pts": (d.get("em") or {}).get("em"),
+        "em_hi": (d.get("em") or {}).get("hi"),
+        "em_lo": (d.get("em") or {}).get("lo"),
+        "em_src": (d.get("em") or {}).get("src"),
         # ── الخام: يسمح بإعادة الحساب بأي تعريف لاحق بلا جمع جديد ──
         "cols": "strike,call_vol,put_vol,call_oi,put_oi",
         "table_json": [[t["strike"], t["call_vol"], t["put_vol"],
@@ -1140,7 +1155,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.9.2",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.9.3",
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
@@ -1963,6 +1978,18 @@ function aggRead(r){
   lead:g[1],leadDir:g[2],covMin:r.cov/60000,leadPct:r[g[0]]/cls*100,cover:all?cls/all*100:0,
   pct:{cb:r.cb/cls*100,cs:r.cs/cls*100,pb:r.pb/cls*100,ps:r.ps/cls*100}};
 }
+/* [v1.9.3] المسيطر من الخادم — جامع liq v2.7 كل 5 ثوانٍ طوال الجلسة.
+   يُسأل كل 8 ثوانٍ، والرد يُعتبر صالحاً 30 ثانية. عند أي فشل يبقى
+   حساب المتصفح كما هو. */
+const SA={t:0,at:0,d:null};
+function srvAgg(){
+ const now=Date.now();
+ if(now-SA.t>8000){SA.t=now;
+  const c=new AbortController();setTimeout(()=>c.abort(),4000);
+  fetch(BOT+"/liq_agg",{signal:c.signal}).then(r=>r.json())
+   .then(j=>{if(j&&j.ok){SA.d=j;SA.at=Date.now();}}).catch(()=>{});}
+ return (SA.d&&now-SA.at<30000&&SA.d.underlying===U)?SA.d:null;
+}
 function buildLadder(d){
  const L=[], P0=d.pos||{}, sp=d.spot;
  if(d.em){L.push({p:d.em.hi,n:"حدّ اليوم ↑",t:"صمد 86–93%",c:"var(--dim)"});
@@ -1982,14 +2009,21 @@ function renderNow(d){
  el.style.opacity=live?"":".6";
  document.getElementById("nts").textContent=live?d.ny_time+" NY":"خارج الجلسة · يعمل 09:30–16:00 NY";
  // ① المسيطر — خارج الجلسة: آخر قراءة محفوظة بلا تحديث
- let a;
- if(live)a=aggRead(aggUpdate(d,Date.now()));
+ let a, src="المتصفح";
+ if(live){
+  a=aggRead(aggUpdate(d,Date.now()));
+  let sv=null; try{sv=srvAgg();}catch(e){}
+  if(sv&&(sv.cov_sec/60)>=(a.covMin||0)){
+   a=aggRead({cb:sv.cb,cs:sv.cs,pb:sv.pb,ps:sv.ps,u:sv.u,cov:sv.cov_sec*1000});
+   src="الخادم";
+  }
+ }
  else{const r={cb:0,cs:0,pb:0,ps:0,u:0,cov:0};
   for(const e of AG.ev){for(const k of ["cb","cs","pb","ps","u"])r[k]+=e[k];r.cov+=(e.dt||5000);}
   r.cov=Math.min(r.cov,AG_WIN);a=aggRead(r);
   if(a.ready)a.lead="آخر قراءة: "+a.lead;}
  const B=document.getElementById("agB"),S=document.getElementById("agS"),V=document.getElementById("agV");
- const cvT=" · مغطّى "+(a.covMin||0).toFixed(1)+" من 5 د";
+ const cvT=" · مغطّى "+(a.covMin||0).toFixed(1)+" من 5 د"+(live?" · "+src:"");
  if(!a.ready){
   B.style.width=S.style.width="50%";B.textContent="مشترون —";S.textContent="بائعون —";
   V.style.color="var(--dim)";V.textContent=live?"جارٍ البناء… "+K(a.cls)+" عقد مصنّف"+cvT:"لا قراءة محفوظة — يبدأ مع الافتتاح";
