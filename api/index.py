@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.9.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.9.2)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㉜ [v1.9.2] «قراءة اللحظة» تظهر دائماً: خارج الجلسة باهتة بوسم «خارج
+     الجلسة» مع آخر قراءة محفوظة للمسيطر، بدل الإخفاء التام.
+
   ㉛ [v1.9.1] شريط المسيطر يُحفظ في المتصفح (مفتاح لكل أداة) — ينجو من
      إعادة التحميل وقفل الجوال. ⚠ لا يملأ الفراغ: ما لم تكن الصفحة مفتوحة
      لا يُرى تداوله، فيُعرض «مغطّى X من 5 د» بدل ادّعاء نافذة كاملة.
@@ -1137,7 +1140,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.9.1",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.9.2",
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
@@ -1974,16 +1977,22 @@ function buildLadder(d){
 const F1=v=>(v>0?"+":"")+v.toFixed(Math.abs(v)<10?2:1);
 function renderNow(d){
  const el=document.getElementById("now"); if(!el)return;
- if(d.session!=="open"){el.style.display="none";return;}
  el.style.display="";
- document.getElementById("nts").textContent=d.ny_time+" NY";
- // ① المسيطر
- const a=aggRead(aggUpdate(d,Date.now()));
+ const live=d.session==="open";
+ el.style.opacity=live?"":".6";
+ document.getElementById("nts").textContent=live?d.ny_time+" NY":"خارج الجلسة · يعمل 09:30–16:00 NY";
+ // ① المسيطر — خارج الجلسة: آخر قراءة محفوظة بلا تحديث
+ let a;
+ if(live)a=aggRead(aggUpdate(d,Date.now()));
+ else{const r={cb:0,cs:0,pb:0,ps:0,u:0,cov:0};
+  for(const e of AG.ev){for(const k of ["cb","cs","pb","ps","u"])r[k]+=e[k];r.cov+=(e.dt||5000);}
+  r.cov=Math.min(r.cov,AG_WIN);a=aggRead(r);
+  if(a.ready)a.lead="آخر قراءة: "+a.lead;}
  const B=document.getElementById("agB"),S=document.getElementById("agS"),V=document.getElementById("agV");
  const cvT=" · مغطّى "+(a.covMin||0).toFixed(1)+" من 5 د";
  if(!a.ready){
   B.style.width=S.style.width="50%";B.textContent="مشترون —";S.textContent="بائعون —";
-  V.style.color="var(--dim)";V.textContent="جارٍ البناء… "+K(a.cls)+" عقد مصنّف"+cvT;
+  V.style.color="var(--dim)";V.textContent=live?"جارٍ البناء… "+K(a.cls)+" عقد مصنّف"+cvT:"لا قراءة محفوظة — يبدأ مع الافتتاح";
   for(const k of ["CB","CS","PB","PS"])document.getElementById("ag"+k).textContent="—";
   document.getElementById("agF").textContent="";
  }else{
