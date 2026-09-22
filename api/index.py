@@ -1,12 +1,29 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.1.3)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㊳ [v2.1.3] رسم «قوة الاتجاه» أوضح: خط واحد منعَّم (متوسط 5 دقائق) بدل خطّين
+     متعاكسين يتقاطعان · مساحة خضراء فوق 50% وحمراء تحته · نقطة القيمة الحالية
+     برقمها · شبكة ساعات · ارتفاع أكبر. ⚠ البيانات ما زالت من المتصفح حتى liq.
+
+  ㊲ [v2.1.2] ثبات القرار — كان يتقلّب كل دقيقة عند عتبة 55% (22 سبتمبر 11:48–11:50)
+     ① تخلّف في الضغط: يصير صعودياً عند ≥55% ولا يعود متوازناً إلا تحت 50%
+        (والعكس للهبوط). رقم 54↔55 لم يعد يقلب شيئاً.
+     ② التأكيد: الدخول (CALL/PUT) يثبت 60 ثانية متصلة قبل أن يظهر،
+        والتراجع إلى «انتظر» 20 ثانية. يُكتب «قيد التأكيد» أثناءها.
+     ③ الهدف = أول عائق في الطريق لا VWAP دائماً: جدار CALL عند +0.6 بين
+        السعر وVWAP كان يُتجاهل فقالت CALL بهدف +9.7. الآن العائق الأقرب
+        هو الهدف، وإن كان أقرب من الحدّ الأدنى ⇒ انتظر.
+     + التدفّق يبقى داخل «تفاصيل متقدمة» (طلب خالد) · محور الزمن مُصلح.
+
+  ㊱ [v2.1.1] محور الزمن في رسم قوة الاتجاه كان معكوساً (09:30 يميناً والخط يُرسم
+     من اليسار) ⇒ صار يساراً ليطابق الرسم.
+
   ㉟ [v2.1] قرار أدق + قراءة أسهل
      ① شرط الربح/الخطر إلزامي: المسافة للهدف ≥ المسافة للإبطال، والهدف
         ≥ 0.04% من السعر (~3 نقاط SPX). وإلا «انتظر» مع النسبة مكتوبة.
@@ -1180,7 +1197,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.1",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.1.3",
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
@@ -1486,8 +1503,8 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .vg{margin-top:7px;font-size:10.5px;color:var(--dim)}
 details.adv{margin-bottom:9px}
 .ts{margin:0 0 10px}
-.ts svg{width:100%;height:64px;display:block;background:rgba(255,255,255,.025);border-radius:9px}
-.tsl{display:flex;justify-content:space-between;font-size:9.5px;color:var(--ft);margin-top:3px}
+.ts svg{width:100%;height:96px;display:block;background:linear-gradient(180deg,rgba(45,212,160,.05),rgba(255,255,255,.015) 50%,rgba(255,92,114,.05));border-radius:10px}
+.tsl{direction:ltr;display:flex;justify-content:space-between;font-size:9.5px;color:var(--ft);margin-top:3px}
 .lr i{font-style:normal;font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;margin-inline-start:4px}
 details.adv>summary{cursor:pointer;list-style:none;text-align:center;font-size:12px;color:var(--dim);padding:9px;border:1px dashed var(--ln);border-radius:12px;margin-bottom:9px}
 details.adv>summary::-webkit-details-marker{display:none}
@@ -1526,8 +1543,8 @@ details.adv[open]>summary{color:var(--tx)}
   <div class="vg" id="vG">تجريبي · غير مختبَر</div>
  </div>
  <div class="ts"><div class="nlb"><span>قوة الاتجاه · الضغط الصعودي عبر اليوم</span><span id="tsn" style="font-size:9.5px"></span></div>
-  <svg id="tsv" viewBox="0 0 390 64" preserveAspectRatio="none"></svg>
-  <div class="tsl"><span>09:30</span><span>12:00</span><span>16:00</span></div></div>
+  <svg id="tsv" viewBox="0 0 390 96" preserveAspectRatio="none"></svg>
+  <div class="tsl"><span>09:30</span><span>11:00</span><span>12:30</span><span>14:00</span><span>16:00</span></div></div>
  <div class="nsec">
   <div class="nlb"><span>الضغط · آخر 5 دقائق (للتوقيت فقط)</span><span class="ntag">غير مختبَر</span></div>
   <div class="agb"><u id="agB" style="width:50%;background:#2dd4a0;color:#06251b">صعودي —</u>
@@ -1555,12 +1572,6 @@ details.adv[open]>summary{color:var(--tx)}
 <div class="picks"><span>سترايكات</span>__PICKS__</div>
 
 <details class="adv"><summary>تفاصيل متقدمة · للتحليل ▾</summary>
-<div class="stats">
- <div class="st"><u>كول</u><b id="cv" style="color:var(--up)">—</b></div>
- <div class="st"><u>بوت / كول</u><b id="pc">—</b></div>
- <div class="st"><u>بوت</u><b id="pv" style="color:var(--dn)">—</b></div>
-</div>
-
 <div class="flow" id="flow">
  <div class="fhd"><span>تدفّق آخر 15 دقيقة · 8 سترايك فوق و8 تحت</span>
   <span id="fnote"><s style="color:var(--dim)">جارٍ بناء النافذة…</s></span></div>
@@ -1581,6 +1592,11 @@ details.adv[open]>summary{color:var(--tx)}
   <div class="fmfoot"><span id="fmacc">تسارع —</span>
    <span>العدّاد والأرقام: النطاق النشط · رتبة 3–8</span></div>
  </div>
+</div>
+<div class="stats">
+ <div class="st"><u>كول</u><b id="cv" style="color:var(--up)">—</b></div>
+ <div class="st"><u>بوت / كول</u><b id="pc">—</b></div>
+ <div class="st"><u>بوت</u><b id="pv" style="color:var(--dn)">—</b></div>
 </div>
 
 <div class="walls">
@@ -2046,14 +2062,14 @@ function srvAgg(){
 /* ═══ [v2.0] القرار — النظام أولاً ثم الاتجاه ═══
    دالة نقية: تأخذ اللقطة ونسبة الضغط الصعودي وترجع {v, c, why, tgt, inv}.
    ⚠ تجريبية — تُختبر على السجل قبل أي اعتماد. */
-function decide(d,bull){
+function decide(d,bull,fstate){
  const P0=d.pos||{}, sp=d.spot, w=d.vwap, flip=P0.flip;
  const R=(v,why)=>({v:v,c:v.includes("CALL")?"var(--up)":v.includes("PUT")?"var(--dn)":"var(--wr)",why:why,tgt:null,inv:null,rr:null,side:null});
  if(!w||sp==null)return R("انتظر","بانتظار VWAP");
  const g=w.gate, ext=w.dist_spy, vw=w.vwap_und;
  const near=sp*0.0007;                       // ~5 نقاط SPX · ~0.5 SPY
  const minTgt=sp*0.0004;                     // ~3 نقاط SPX · ~0.3 SPY
- const flow=bull==null?0:bull>=55?1:bull<=45?-1:0;
+ const flow=(fstate!=null)?fstate:(bull==null?0:bull>=55?1:bull<=45?-1:0);
  const fTxt=bull==null?"الضغط لم يكتمل":flow>0?"الضغط صعودي "+Math.round(bull)+"%":flow<0?"الضغط هبوطي "+Math.round(100-bull)+"%":"الضغط متوازن";
  const cw=P0.call_wall, pw=P0.put_wall, em=d.em||{};
  const trend=(flip!=null&&sp<flip);
@@ -2076,14 +2092,19 @@ function decide(d,bull){
    if(flow<=0)return R("انتظر",rg+" · تحت VWAP بـ"+ext$+" لكن "+fTxt+" — انتظر تحوّله صعودياً");
    const atW=pw!=null&&sp-pw>=0&&sp-pw<=near;
    const inv=(pw!=null&&pw<sp)?pw:(em.lo!=null?em.lo:null);
+   // أول عائق فوق السعر: جدار CALL إن سبق VWAP
+   const blk=(cw!=null&&cw>sp&&cw<vw);
+   if(blk&&cw-sp<minTgt)return Object.assign(R("انتظر",rg+" · تحت VWAP بـ"+ext$+" · "+fTxt+" · لكن جدار CALL فوقك مباشرة ("+pts(cw-sp)+")"),{rr:"ربح "+(cw-sp).toFixed(sp>1000?0:2)+" حتى أول مقاومة ✗"});
    return fin("CALL",ext<=-2*g||atW,rg+" · تحت VWAP بـ"+ext$+" · "+fTxt+(atW?" · عند جدار PUT":""),
-     vw,"VWAP",inv,(pw!=null&&pw<sp)?"كسر جدار PUT":"كسر حدّ اليوم");}
+     blk?cw:vw,blk?"جدار CALL":"VWAP",inv,(pw!=null&&pw<sp)?"كسر جدار PUT":"كسر حدّ اليوم");}
   if(ext>=g){
    if(flow>=0)return R("انتظر",rg+" · فوق VWAP بـ"+ext$+" لكن "+fTxt+" — انتظر تحوّله هبوطياً");
    const atW=cw!=null&&cw-sp>=0&&cw-sp<=near;
    const inv=(cw!=null&&cw>sp)?cw:(em.hi!=null?em.hi:null);
+   const blk=(pw!=null&&pw<sp&&pw>vw);
+   if(blk&&sp-pw<minTgt)return Object.assign(R("انتظر",rg+" · فوق VWAP بـ"+ext$+" · "+fTxt+" · لكن جدار PUT تحتك مباشرة ("+pts(pw-sp)+")"),{rr:"ربح "+(sp-pw).toFixed(sp>1000?0:2)+" حتى أول دعم ✗"});
    return fin("PUT",ext>=2*g||atW,rg+" · فوق VWAP بـ"+ext$+" · "+fTxt+(atW?" · عند جدار CALL":""),
-     vw,"VWAP",inv,(cw!=null&&cw>sp)?"اختراق جدار CALL":"اختراق حدّ اليوم");}
+     blk?pw:vw,blk?"جدار PUT":"VWAP",inv,(cw!=null&&cw>sp)?"اختراق جدار CALL":"اختراق حدّ اليوم");}
   return R("انتظر",rg+" · قريب من VWAP ("+(ext>=0?"+":"−")+ext$+") — لا ميزة، انتظر ابتعاده");
  }
  const rt="ترند (تحت الانقلاب "+Math.round(flip)+") — الحركة تميل للامتداد";
@@ -2094,6 +2115,28 @@ function decide(d,bull){
  const nxN=dir<0?((pw!=null&&pw<sp)?"جدار PUT":"حدّ اليوم"):((cw!=null&&cw>sp)?"جدار CALL":"حدّ اليوم");
  return fin(dir<0?"PUT":"CALL",st,rt+" · "+(dir<0?"تحت":"فوق")+" VWAP · "+fTxt,
    nx==null?null:nx,nxN,vw,"عودة "+(dir<0?"فوق":"تحت")+" VWAP");
+}
+/* ═══ [v2.1.2] ثبات القرار ═══
+   ① تخلّف الضغط: +1 عند ≥55 ويبقى حتى <50 · −1 عند ≤45 ويبقى حتى >50.
+   ② تأكيد 60 ثانية: القرار الجديد يظهر فقط بعد ثباته دقيقة متصلة. */
+const VS={f:0,cur:null,cand:null,since:0};
+const V_CONFIRM=60000;
+function flowHyst(bull){
+ if(bull==null){VS.f=0;return 0;}
+ if(VS.f===1){ if(bull<50)VS.f=(bull<=45?-1:0); }
+ else if(VS.f===-1){ if(bull>50)VS.f=(bull>=55?1:0); }
+ else { VS.f=bull>=55?1:bull<=45?-1:0; }
+ return VS.f;
+}
+function stableVerdict(raw,now){
+ if(!VS.cur){VS.cur=raw;VS.cand=null;return {o:raw,pending:null};}
+ if(raw.v===VS.cur.v){VS.cur=raw;VS.cand=null;return {o:raw,pending:null};}
+ if(!VS.cand||VS.cand.v!==raw.v){VS.cand=raw;VS.since=now;}
+ else VS.cand=Object.assign(raw,{});
+ // التراجع إلى «انتظر» أسرع (20ث) من الدخول (60ث) — الحذر أولى
+ const need=raw.v==="انتظر"?20000:V_CONFIRM;
+ if(now-VS.since>=need){VS.cur=raw;VS.cand=null;return {o:raw,pending:null};}
+ return {o:VS.cur,pending:{v:raw.v,left:Math.ceil((need-(now-VS.since))/1000)}};
 }
 /* العقد المرشّح: أقرب سترايك في اتجاه القرار — كما يختار البوت (ATM) */
 function pickContract(d,side){
@@ -2107,7 +2150,7 @@ function pickContract(d,side){
  }
  return best;
 }
-function paintVerdict(o,live,d){
+function paintVerdict(o,live,d,pending){
  const W=document.getElementById("vW"),Rr=document.getElementById("vR"),T=document.getElementById("vT");
  if(!live){W.textContent="—";W.style.color="var(--dim)";Rr.textContent="خارج الجلسة";T.innerHTML="";return;}
  W.textContent=o.v;W.style.color=o.c;Rr.textContent=o.why;
@@ -2117,6 +2160,7 @@ function paintVerdict(o,live,d){
  if(o.rr)h+=`<span style="color:${o.rr.endsWith("✓")?"var(--up)":"var(--wr)"}">${o.rr}</span>`;
  const c=o.side&&d?pickContract(d,o.side):null;
  if(c)h+=`<span style="color:#8ab6ff">مرشّح ${o.side} ${c.k} · $${Number(c.ask).toFixed(2)}</span>`;
+ if(pending)h+=`<span style="color:var(--dim)">تحوّل إلى ${pending.v} قيد التأكيد · ${pending.left}ث</span>`;
  T.innerHTML=h;
 }
 /* ═══ قوة الاتجاه — نقطة كل دقيقة، في المتصفح لكل أداة، تتصفّر يومياً ═══ */
@@ -2136,23 +2180,39 @@ function tsRecord(d,bull){
 function tsDraw(){
  const sv=document.getElementById("tsv"); if(!sv)return;
  let o=null;try{o=JSON.parse(localStorage.getItem(TSK));}catch(e){}
- const P=(o&&o.p)||[];
- const X=mn=>Math.max(0,Math.min(390,mn-570)), Y=b=>64-(b/100)*64;
- let h=`<line x1="0" y1="32" x2="390" y2="32" stroke="rgba(255,255,255,.18)" stroke-dasharray="3 3"/>`;
- if(P.length>1){
-  let segs=[],cur=[P[0]];
-  for(let i=1;i<P.length;i++){ if(P[i][0]-P[i-1][0]>5){segs.push(cur);cur=[];} cur.push(P[i]); }
-  segs.push(cur);
-  for(const sg of segs){ if(sg.length<2)continue;
-   const pts=sg.map(p=>X(p[0])+","+Y(p[1])).join(" ");
-   const area=`${X(sg[0][0])},32 ${pts} ${X(sg[sg.length-1][0])},32`;
-   h+=`<polygon points="${area}" fill="rgba(45,212,160,.10)"/>`;
-   h+=`<polyline points="${sg.map(p=>X(p[0])+","+Y(100-p[1])).join(" ")}" fill="none" stroke="#ff5c72" stroke-width="1.6"/>`;
-   h+=`<polyline points="${pts}" fill="none" stroke="#2dd4a0" stroke-width="1.8"/>`;}
+ const P=(o&&o.p)||[], H=96, M=H/2;
+ const X=mn=>Math.max(0,Math.min(390,mn-570)), Y=b=>H-4-(b/100)*(H-8);
+ // شبكة: خط 50% + ساعات
+ let h=`<defs><clipPath id="cU"><rect x="0" y="0" width="390" height="${Y(50)}"/></clipPath>
+  <clipPath id="cD"><rect x="0" y="${Y(50)}" width="390" height="${H}"/></clipPath></defs>`;
+ for(let t=600;t<960;t+=60)h+=`<line x1="${X(t)}" y1="0" x2="${X(t)}" y2="${H}" stroke="rgba(255,255,255,.05)"/>`;
+ h+=`<line x1="0" y1="${Y(50)}" x2="390" y2="${Y(50)}" stroke="rgba(255,255,255,.22)" stroke-dasharray="4 4"/>`;
+ // تنعيم: متوسط آخر 5 دقائق داخل كل مقطع متصل
+ const segs=[];let cur=[];
+ for(let i=0;i<P.length;i++){ if(i&&P[i][0]-P[i-1][0]>5){segs.push(cur);cur=[];} cur.push(P[i]); }
+ if(cur.length)segs.push(cur);
+ let lastPt=null;
+ for(const sg of segs){
+  const sm=sg.map((p,i)=>{const w=sg.slice(Math.max(0,i-4),i+1);return [p[0],w.reduce((a,q)=>a+q[1],0)/w.length];});
+  if(sm.length===1){lastPt=sm[0];continue;}
+  const line=sm.map(p=>X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1)).join(" ");
+  const area=`${X(sm[0][0])},${Y(50)} ${line} ${X(sm[sm.length-1][0])},${Y(50)}`;
+  h+=`<polygon points="${area}" fill="rgba(45,212,160,.28)" clip-path="url(#cU)"/>`;
+  h+=`<polygon points="${area}" fill="rgba(255,92,114,.28)" clip-path="url(#cD)"/>`;
+  h+=`<polyline points="${line}" fill="none" stroke="#2dd4a0" stroke-width="2" stroke-linejoin="round" clip-path="url(#cU)"/>`;
+  h+=`<polyline points="${line}" fill="none" stroke="#ff5c72" stroke-width="2" stroke-linejoin="round" clip-path="url(#cD)"/>`;
+  lastPt=sm[sm.length-1];
+ }
+ if(lastPt){
+  const up=lastPt[1]>=50, c=up?"#2dd4a0":"#ff5c72", x=X(lastPt[0]), y=Y(lastPt[1]);
+  h+=`<circle cx="${x}" cy="${y}" r="3.5" fill="${c}" stroke="#0b111b" stroke-width="1.5"/>`;
  }
  sv.innerHTML=h;
  const n=document.getElementById("tsn");
- if(n)n.textContent=P.length?("أخضر صعودي · أحمر هبوطي · "+P.length+" دقيقة مسجّلة"):"يمتلئ والصفحة مفتوحة";
+ if(n){
+  if(lastPt){const v=Math.round(lastPt[1]);n.innerHTML=`<b style="color:${v>=50?"var(--up)":"var(--dn)"}">${v>=50?"صعودي "+v:"هبوطي "+(100-v)}%</b> · ${P.length} دقيقة`;}
+  else n.textContent="يمتلئ والصفحة مفتوحة";
+ }
 }
 function markNearest(L,sp){
  let up=null,dn=null;
@@ -2215,7 +2275,12 @@ function renderNow(d){
   document.getElementById("agF").textContent=K(a.cls)+" عقد مصنّف من "+K(a.all)+" ("+Math.round(a.cover)+"%)"+cvT;
  }
  // ⓪ القرار
- try{paintVerdict(decide(d,a.ready?a.bullPct:null),live,d);}catch(e){console.log("verdict",e);}
+ try{
+  const bu=a.ready?a.bullPct:null;
+  const raw=decide(d,bu,live?flowHyst(bu):null);
+  const sv=live?stableVerdict(raw,Date.now()):{o:raw,pending:null};
+  paintVerdict(sv.o,live,d,sv.pending);
+ }catch(e){console.log("verdict",e);}
  try{if(live&&a.ready)tsRecord(d,a.bullPct);tsDraw();}catch(e){console.log("ts",e);}
  // ② بوابة VWAP
  const g=document.getElementById("gsec"), w=d.vwap;
