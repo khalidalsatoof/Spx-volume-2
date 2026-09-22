@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.1.3)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.2)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㊴ [v2.2] ① /snap يُخرج نطاق اليوم (day_high · day_low · day_range) لتحفظه
+     liq v2.8 ويُختبر عليه سبب خسارة إشارات النطاق الميت.
+     ② رسم قوة الاتجاه يقرأ سلسلة اليوم من الخادم (/liq_agg · حقل series ·
+        نقطة لكل دقيقة) فيظهر اليوم كاملاً حتى لو لم تُفتح الصفحة إطلاقاً.
+        المتصفح يبقى احتياطاً: تُدمج نقاطه مع الخادم، والخادم له الأولوية.
+
   ㊳ [v2.1.3] رسم «قوة الاتجاه» أوضح: خط واحد منعَّم (متوسط 5 دقائق) بدل خطّين
      متعاكسين يتقاطعان · مساحة خضراء فوق 50% وحمراء تحته · نقطة القيمة الحالية
      برقمها · شبكة ساعات · ارتفاع أكبر. ⚠ البيانات ما زالت من المتصفح حتى liq.
@@ -1128,6 +1134,10 @@ def snapshot_row(underlying="SPX", tag="", sig_key="", n=30):
         "em_hi": (d.get("em") or {}).get("hi"),
         "em_lo": (d.get("em") or {}).get("lo"),
         "em_src": (d.get("em") or {}).get("src"),
+        # [v2.2] نطاق اليوم حتى هذه اللحظة
+        "day_high": d.get("day_high"), "day_low": d.get("day_low"),
+        "day_range": (round(d["day_high"] - d["day_low"], 2)
+                      if d.get("day_high") and d.get("day_low") else None),
         # ── الخام: يسمح بإعادة الحساب بأي تعريف لاحق بلا جمع جديد ──
         "cols": "strike,call_vol,put_vol,call_oi,put_oi",
         "table_json": [[t["strike"], t["call_vol"], t["put_vol"],
@@ -1197,7 +1207,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.1.3",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.2",
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
@@ -2180,7 +2190,14 @@ function tsRecord(d,bull){
 function tsDraw(){
  const sv=document.getElementById("tsv"); if(!sv)return;
  let o=null;try{o=JSON.parse(localStorage.getItem(TSK));}catch(e){}
- const P=(o&&o.p)||[], H=96, M=H/2;
+ // [v2.2] الخادم أولاً (سلسلة اليوم كاملة) ثم نقاط المتصفح لما ينقصه
+ const mp=new Map();
+ for(const p of ((o&&o.p)||[]))mp.set(p[0],p[1]);
+ let srvN=0;
+ try{const sv=SA.d;
+  if(sv&&sv.series&&sv.underlying===U){for(const p of sv.series){mp.set(p[0],p[1]);srvN++;}}
+ }catch(e){}
+ const P=[...mp.entries()].sort((a,b)=>a[0]-b[0]), H=96, M=H/2;
  const X=mn=>Math.max(0,Math.min(390,mn-570)), Y=b=>H-4-(b/100)*(H-8);
  // شبكة: خط 50% + ساعات
  let h=`<defs><clipPath id="cU"><rect x="0" y="0" width="390" height="${Y(50)}"/></clipPath>
@@ -2210,7 +2227,7 @@ function tsDraw(){
  sv.innerHTML=h;
  const n=document.getElementById("tsn");
  if(n){
-  if(lastPt){const v=Math.round(lastPt[1]);n.innerHTML=`<b style="color:${v>=50?"var(--up)":"var(--dn)"}">${v>=50?"صعودي "+v:"هبوطي "+(100-v)}%</b> · ${P.length} دقيقة`;}
+  if(lastPt){const v=Math.round(lastPt[1]);n.innerHTML=`<b style="color:${v>=50?"var(--up)":"var(--dn)"}">${v>=50?"صعودي "+v:"هبوطي "+(100-v)}%</b> · ${P.length} دقيقة${srvN?" · الخادم":" · المتصفح"}`;}
   else n.textContent="يمتلئ والصفحة مفتوحة";
  }
 }
