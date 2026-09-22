@@ -1,12 +1,37 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v1.9.3)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.1)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㉟ [v2.1] قرار أدق + قراءة أسهل
+     ① شرط الربح/الخطر إلزامي: المسافة للهدف ≥ المسافة للإبطال، والهدف
+        ≥ 0.04% من السعر (~3 نقاط SPX). وإلا «انتظر» مع النسبة مكتوبة.
+        السبب: مثال 22 سبتمبر 11:04 قال CALL بهدف +5 وخطر −16 (1:3 ضدّك).
+     ② العقد المرشّح: أقرب سترايك في اتجاه القرار مع سعر الطلب.
+     ③ «قوة الاتجاه»: خط الضغط الصعودي عبر اليوم (نقطة كل دقيقة، يُحفظ
+        في المتصفح لكل أداة ويتصفّر يومياً). ⚠ يمتلئ فقط والصفحة مفتوحة
+        حتى يُضاف الجمع من الخادم في liq.
+     ④ لصاقتا «مقاومة مباشرة» و«دعم مباشر» على أقرب مستوى فوق وتحت.
+
+  ㉞ [v2.0] «القرار» — كلمة واحدة بدل مؤشرات متعاكسة
+     الإطار (المعتمد عند SpotGamma ومن يتبعها): النظام أولاً ثم الاتجاه.
+       ① النظام من خط الانقلاب: فوقه = تذبذب (الوسطاء يبيعون الصعود ويشترون
+          الهبوط ⇒ السعر يرتد نحو VWAP) · تحته = ترند (يلاحقون الحركة ⇒ تمتد).
+       ② التذبذب: الدخول **عكس** الامتداد عن VWAP بعد أن يتحوّل الضغط —
+          يطابق نتيجتنا الوحيدة المسنودة (الإشارة المتأخرة بعد امتداد تخسر).
+          الهدف VWAP · الإبطال الجدار خلف السعر.
+       ③ الترند: الدخول **مع** جهة السعر من VWAP حين يؤكّد الضغط.
+          الهدف الجدار التالي أو حدّ اليوم · الإبطال VWAP.
+       الضغط (5د) لتأكيد التوقيت فقط لا لتحديد الاتجاه — لأنه يتقلّب.
+     ⚠ تجريبي غير مختبَر. يُسجَّل للاختبار مع liq لاحقاً.
+     + تنظيف: الخانات الأربع وشريط المشترين/البائعين وأزرار البوابة
+       اختفت · شريط واحد صعودي/هبوطي · الأقسام القديمة (التدفّق والجدران
+       والتموضع والإجماليات) مطويّة تحت «تفاصيل متقدمة».
+
   ㉝ [v1.9.3] ① /snap يُخرج بوابة VWAP وحدّي اليوم كحقول مسطّحة لتحفظها liq v2.7.
      ② شريط المسيطر يقرأ من الخادم (/liq_agg — جامع كل 5 ثوانٍ على Render)
         حين تكون تغطيته أكبر من تغطية المتصفح، ويسقط للمتصفح عند أي فشل.
@@ -1155,7 +1180,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "1.9.3",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.1",
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
@@ -1451,6 +1476,22 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .lr em{font-style:normal;text-align:left;font-size:10px;color:var(--dim)}
 .lr.px{background:rgba(74,144,255,.14);border-radius:7px}
 .lr.px b{color:#8ab6ff}
+/* ── [v2.0] القرار ── */
+.hide{display:none!important}
+.vd{border-radius:12px;padding:12px 10px 10px;margin-bottom:10px;text-align:center;background:rgba(255,255,255,.035);border:1px solid var(--ln)}
+.vw{font-size:30px;font-weight:800;letter-spacing:.5px;line-height:1.1}
+.vr{margin-top:6px;font-size:12px;color:var(--tx);line-height:1.55}
+.vt{display:flex;justify-content:center;gap:14px;margin-top:8px;font-size:12px;font-weight:700;flex-wrap:wrap}
+.vt span{padding:3px 9px;border-radius:8px;background:rgba(255,255,255,.05)}
+.vg{margin-top:7px;font-size:10.5px;color:var(--dim)}
+details.adv{margin-bottom:9px}
+.ts{margin:0 0 10px}
+.ts svg{width:100%;height:64px;display:block;background:rgba(255,255,255,.025);border-radius:9px}
+.tsl{display:flex;justify-content:space-between;font-size:9.5px;color:var(--ft);margin-top:3px}
+.lr i{font-style:normal;font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;margin-inline-start:4px}
+details.adv>summary{cursor:pointer;list-style:none;text-align:center;font-size:12px;color:var(--dim);padding:9px;border:1px dashed var(--ln);border-radius:12px;margin-bottom:9px}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv[open]>summary{color:var(--tx)}
 /* [v1.9.1] لابتوب: عمود مركزي بعرض قراءة مريح بدل تمدّد الأشرطة على الشاشة كلها */
 @media (min-width:760px){body{max-width:720px;margin:0 auto;padding-left:18px;padding-right:18px}
  .agb{height:30px;font-size:13px}.agv{font-size:14.5px}.lr{font-size:12px;padding:6px 4px}}
@@ -1477,13 +1518,22 @@ body{margin:0;background:var(--bg);color:var(--tx);
 </div>
 
 <div class="now" id="now" style="display:none">
- <div class="nhd"><b>قراءة اللحظة</b><span id="nts"></span></div>
+ <div class="nhd"><b>القرار</b><span id="nts"></span></div>
+ <div class="vd" id="vd">
+  <div class="vw" id="vW" style="color:var(--dim)">—</div>
+  <div class="vr" id="vR">جارٍ القراءة…</div>
+  <div class="vt" id="vT"></div>
+  <div class="vg" id="vG">تجريبي · غير مختبَر</div>
+ </div>
+ <div class="ts"><div class="nlb"><span>قوة الاتجاه · الضغط الصعودي عبر اليوم</span><span id="tsn" style="font-size:9.5px"></span></div>
+  <svg id="tsv" viewBox="0 0 390 64" preserveAspectRatio="none"></svg>
+  <div class="tsl"><span>09:30</span><span>12:00</span><span>16:00</span></div></div>
  <div class="nsec">
-  <div class="nlb"><span>المسيطر · آخر 5 دقائق</span><span class="ntag">غير مختبَر</span></div>
-  <div class="agb"><u id="agB" style="width:50%;background:#2dd4a0;color:#06251b">مشترون —</u>
-   <u id="agS" style="width:50%;background:#ff5c72;color:#2a060c">بائعون —</u></div>
-  <div class="agv" id="agV" style="color:var(--dim)">جارٍ البناء…</div>
-  <div class="ag4">
+  <div class="nlb"><span>الضغط · آخر 5 دقائق (للتوقيت فقط)</span><span class="ntag">غير مختبَر</span></div>
+  <div class="agb"><u id="agB" style="width:50%;background:#2dd4a0;color:#06251b">صعودي —</u>
+   <u id="agS" style="width:50%;background:#ff5c72;color:#2a060c">هبوطي —</u></div>
+  <div class="agv hide" id="agV" style="color:var(--dim)">جارٍ البناء…</div>
+  <div class="ag4 hide">
    <span><s style="text-decoration:none;color:var(--up)">شراء CALL</s><b id="agCB">—</b></span>
    <span><s style="text-decoration:none;color:var(--dn)">شراء PUT</s><b id="agPB">—</b></span>
    <span><s style="text-decoration:none;color:var(--dim)">بيع PUT ↑</s><b id="agPS">—</b></span>
@@ -1491,7 +1541,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
   </div>
   <div class="agf" id="agF"></div>
  </div>
- <div class="nsec" id="gsec">
+ <div class="nsec hide" id="gsec">
   <div class="nlb"><span>بوابة الدخول · بُعد SPY عن VWAP</span><span class="ntag ok">مسنود · 44 صفقة</span></div>
   <div class="gp"><span id="gC">CALL —</span><span id="gP">PUT —</span></div>
   <div class="gtr"><i id="gZ"></i><b id="gM"></b></div>
@@ -1504,6 +1554,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
 <div class="exp"><span>سلسلة العقود</span><b id="exp">…</b></div>
 <div class="picks"><span>سترايكات</span>__PICKS__</div>
 
+<details class="adv"><summary>تفاصيل متقدمة · للتحليل ▾</summary>
 <div class="stats">
  <div class="st"><u>كول</u><b id="cv" style="color:var(--up)">—</b></div>
  <div class="st"><u>بوت / كول</u><b id="pc">—</b></div>
@@ -1552,6 +1603,8 @@ body{margin:0;background:var(--bg);color:var(--tx);
   <span>جدار البوت <b id="ppw" style="color:var(--dn)">—</b></span>
  </div>
 </div>
+
+</details>
 
 <div class="tbl">
  <div class="hdr"><span>سترايك</span><span>كول / بوت</span><span>نسبة</span>
@@ -1990,6 +2043,125 @@ function srvAgg(){
    .then(j=>{if(j&&j.ok){SA.d=j;SA.at=Date.now();}}).catch(()=>{});}
  return (SA.d&&now-SA.at<30000&&SA.d.underlying===U)?SA.d:null;
 }
+/* ═══ [v2.0] القرار — النظام أولاً ثم الاتجاه ═══
+   دالة نقية: تأخذ اللقطة ونسبة الضغط الصعودي وترجع {v, c, why, tgt, inv}.
+   ⚠ تجريبية — تُختبر على السجل قبل أي اعتماد. */
+function decide(d,bull){
+ const P0=d.pos||{}, sp=d.spot, w=d.vwap, flip=P0.flip;
+ const R=(v,why)=>({v:v,c:v.includes("CALL")?"var(--up)":v.includes("PUT")?"var(--dn)":"var(--wr)",why:why,tgt:null,inv:null,rr:null,side:null});
+ if(!w||sp==null)return R("انتظر","بانتظار VWAP");
+ const g=w.gate, ext=w.dist_spy, vw=w.vwap_und;
+ const near=sp*0.0007;                       // ~5 نقاط SPX · ~0.5 SPY
+ const minTgt=sp*0.0004;                     // ~3 نقاط SPX · ~0.3 SPY
+ const flow=bull==null?0:bull>=55?1:bull<=45?-1:0;
+ const fTxt=bull==null?"الضغط لم يكتمل":flow>0?"الضغط صعودي "+Math.round(bull)+"%":flow<0?"الضغط هبوطي "+Math.round(100-bull)+"%":"الضغط متوازن";
+ const cw=P0.call_wall, pw=P0.put_wall, em=d.em||{};
+ const trend=(flip!=null&&sp<flip);
+ const dg=sp>1000?0:2, pts=v=>(v>0?"+":"")+v.toFixed(sp>1000?1:2), ext$="$"+Math.abs(ext).toFixed(2);
+ // الحكم النهائي: الربح يجب أن يغطّي الخطر
+ const fin=(side,strong,why,tgtP,tgtN,invP,invN)=>{
+  if(tgtP==null||invP==null)return R("انتظر",why+" · لا هدف أو إبطال محدَّد");
+  const rew=Math.abs(tgtP-sp), risk=Math.abs(sp-invP);
+  const rrT="ربح "+rew.toFixed(sp>1000?0:2)+" : خطر "+risk.toFixed(sp>1000?0:2);
+  if(rew<minTgt)return Object.assign(R("انتظر",why+" · الهدف قريب جداً ("+pts(tgtP-sp)+")"),{rr:rrT+" ✗"});
+  if(rew<risk)return Object.assign(R("انتظر",why+" · الخطر أكبر من الربح"),{rr:rrT+" ✗"});
+  const o=R((strong&&rew>=1.5*risk?"STRONG ":"")+side,why);
+  o.side=side; o.rr=rrT+" ✓";
+  o.tgt="الهدف "+tgtN+" "+tgtP.toFixed(dg)+" ("+pts(tgtP-sp)+")";
+  o.inv="الإبطال "+invN+" "+invP.toFixed(dg)+" ("+pts(invP-sp)+")";
+  return o;};
+ if(!trend){
+  const rg="تذبذب"+(flip!=null?" (فوق الانقلاب "+Math.round(flip)+")":"")+" — يميل للارتداد نحو VWAP";
+  if(ext<=-g){
+   if(flow<=0)return R("انتظر",rg+" · تحت VWAP بـ"+ext$+" لكن "+fTxt+" — انتظر تحوّله صعودياً");
+   const atW=pw!=null&&sp-pw>=0&&sp-pw<=near;
+   const inv=(pw!=null&&pw<sp)?pw:(em.lo!=null?em.lo:null);
+   return fin("CALL",ext<=-2*g||atW,rg+" · تحت VWAP بـ"+ext$+" · "+fTxt+(atW?" · عند جدار PUT":""),
+     vw,"VWAP",inv,(pw!=null&&pw<sp)?"كسر جدار PUT":"كسر حدّ اليوم");}
+  if(ext>=g){
+   if(flow>=0)return R("انتظر",rg+" · فوق VWAP بـ"+ext$+" لكن "+fTxt+" — انتظر تحوّله هبوطياً");
+   const atW=cw!=null&&cw-sp>=0&&cw-sp<=near;
+   const inv=(cw!=null&&cw>sp)?cw:(em.hi!=null?em.hi:null);
+   return fin("PUT",ext>=2*g||atW,rg+" · فوق VWAP بـ"+ext$+" · "+fTxt+(atW?" · عند جدار CALL":""),
+     vw,"VWAP",inv,(cw!=null&&cw>sp)?"اختراق جدار CALL":"اختراق حدّ اليوم");}
+  return R("انتظر",rg+" · قريب من VWAP ("+(ext>=0?"+":"−")+ext$+") — لا ميزة، انتظر ابتعاده");
+ }
+ const rt="ترند (تحت الانقلاب "+Math.round(flip)+") — الحركة تميل للامتداد";
+ const dir=ext<0?-1:1;
+ if(flow===0||flow!==dir)return R("انتظر",rt+" · "+(dir<0?"تحت":"فوق")+" VWAP لكن "+fTxt+" — لا تأكيد");
+ const st=(dir<0?bull<=40:bull>=60)&&Math.abs(ext)<=2*g;
+ const nx=dir<0?((pw!=null&&pw<sp)?pw:em.lo):((cw!=null&&cw>sp)?cw:em.hi);
+ const nxN=dir<0?((pw!=null&&pw<sp)?"جدار PUT":"حدّ اليوم"):((cw!=null&&cw>sp)?"جدار CALL":"حدّ اليوم");
+ return fin(dir<0?"PUT":"CALL",st,rt+" · "+(dir<0?"تحت":"فوق")+" VWAP · "+fTxt,
+   nx==null?null:nx,nxN,vw,"عودة "+(dir<0?"فوق":"تحت")+" VWAP");
+}
+/* العقد المرشّح: أقرب سترايك في اتجاه القرار — كما يختار البوت (ATM) */
+function pickContract(d,side){
+ const T=d.table||[]; if(!side||!T.length)return null;
+ const sp=d.spot; let best=null;
+ for(const t of T){
+  const k=t.strike, ask=side==="CALL"?t.call_ask:t.put_ask;
+  if(!(ask>0))continue;
+  if(side==="CALL"?k<sp:k>sp)continue;
+  if(!best||Math.abs(k-sp)<Math.abs(best.k-sp))best={k:k,ask:ask};
+ }
+ return best;
+}
+function paintVerdict(o,live,d){
+ const W=document.getElementById("vW"),Rr=document.getElementById("vR"),T=document.getElementById("vT");
+ if(!live){W.textContent="—";W.style.color="var(--dim)";Rr.textContent="خارج الجلسة";T.innerHTML="";return;}
+ W.textContent=o.v;W.style.color=o.c;Rr.textContent=o.why;
+ let h="";
+ if(o.tgt)h+=`<span style="color:var(--up)">${o.tgt}</span>`;
+ if(o.inv)h+=`<span style="color:var(--dn)">${o.inv}</span>`;
+ if(o.rr)h+=`<span style="color:${o.rr.endsWith("✓")?"var(--up)":"var(--wr)"}">${o.rr}</span>`;
+ const c=o.side&&d?pickContract(d,o.side):null;
+ if(c)h+=`<span style="color:#8ab6ff">مرشّح ${o.side} ${c.k} · $${Number(c.ask).toFixed(2)}</span>`;
+ T.innerHTML=h;
+}
+/* ═══ قوة الاتجاه — نقطة كل دقيقة، في المتصفح لكل أداة، تتصفّر يومياً ═══ */
+const TSK="liq_ts_"+U;
+function tsRecord(d,bull){
+ if(bull==null||d.session!=="open"||!d.ny_time)return;
+ let o=null;try{o=JSON.parse(localStorage.getItem(TSK));}catch(e){}
+ const day=(d.ts_ny||"").slice(0,10)||new Date().toDateString();
+ if(!o||o.day!==day)o={day:day,p:[]};
+ const [h,m]=d.ny_time.split(":").map(Number), mn=h*60+m;
+ const last=o.p[o.p.length-1];
+ if(last&&last[0]===mn)last[1]=Math.round(bull);
+ else o.p.push([mn,Math.round(bull)]);
+ if(o.p.length>400)o.p=o.p.slice(-400);
+ try{localStorage.setItem(TSK,JSON.stringify(o));}catch(e){}
+}
+function tsDraw(){
+ const sv=document.getElementById("tsv"); if(!sv)return;
+ let o=null;try{o=JSON.parse(localStorage.getItem(TSK));}catch(e){}
+ const P=(o&&o.p)||[];
+ const X=mn=>Math.max(0,Math.min(390,mn-570)), Y=b=>64-(b/100)*64;
+ let h=`<line x1="0" y1="32" x2="390" y2="32" stroke="rgba(255,255,255,.18)" stroke-dasharray="3 3"/>`;
+ if(P.length>1){
+  let segs=[],cur=[P[0]];
+  for(let i=1;i<P.length;i++){ if(P[i][0]-P[i-1][0]>5){segs.push(cur);cur=[];} cur.push(P[i]); }
+  segs.push(cur);
+  for(const sg of segs){ if(sg.length<2)continue;
+   const pts=sg.map(p=>X(p[0])+","+Y(p[1])).join(" ");
+   const area=`${X(sg[0][0])},32 ${pts} ${X(sg[sg.length-1][0])},32`;
+   h+=`<polygon points="${area}" fill="rgba(45,212,160,.10)"/>`;
+   h+=`<polyline points="${sg.map(p=>X(p[0])+","+Y(100-p[1])).join(" ")}" fill="none" stroke="#ff5c72" stroke-width="1.6"/>`;
+   h+=`<polyline points="${pts}" fill="none" stroke="#2dd4a0" stroke-width="1.8"/>`;}
+ }
+ sv.innerHTML=h;
+ const n=document.getElementById("tsn");
+ if(n)n.textContent=P.length?("أخضر صعودي · أحمر هبوطي · "+P.length+" دقيقة مسجّلة"):"يمتلئ والصفحة مفتوحة";
+}
+function markNearest(L,sp){
+ let up=null,dn=null;
+ for(const x of L){ if(x.px)continue;
+  if(x.p>sp&&(!up||x.p<up.p))up=x;
+  if(x.p<sp&&(!dn||x.p>dn.p))dn=x; }
+ if(up)up.tag="مقاومة مباشرة"; if(dn)dn.tag="دعم مباشر";
+ return L;
+}
 function buildLadder(d){
  const L=[], P0=d.pos||{}, sp=d.spot;
  if(d.em){L.push({p:d.em.hi,n:"حدّ اليوم ↑",t:"صمد 86–93%",c:"var(--dim)"});
@@ -2025,14 +2197,14 @@ function renderNow(d){
  const B=document.getElementById("agB"),S=document.getElementById("agS"),V=document.getElementById("agV");
  const cvT=" · مغطّى "+(a.covMin||0).toFixed(1)+" من 5 د"+(live?" · "+src:"");
  if(!a.ready){
-  B.style.width=S.style.width="50%";B.textContent="مشترون —";S.textContent="بائعون —";
+  B.style.width=S.style.width="50%";B.textContent="صعودي —";S.textContent="هبوطي —";
   V.style.color="var(--dim)";V.textContent=live?"جارٍ البناء… "+K(a.cls)+" عقد مصنّف"+cvT:"لا قراءة محفوظة — يبدأ مع الافتتاح";
   for(const k of ["CB","CS","PB","PS"])document.getElementById("ag"+k).textContent="—";
-  document.getElementById("agF").textContent="";
+  document.getElementById("agF").textContent=live?"جارٍ البناء…"+cvT:"";
  }else{
-  const bp=Math.round(a.buyPct);
+  const bp=Math.round(a.bullPct);
   B.style.width=Math.max(12,Math.min(88,bp))+"%";S.style.width=Math.max(12,Math.min(88,100-bp))+"%";
-  B.textContent="مشترون "+bp+"%";S.textContent="بائعون "+(100-bp)+"%";
+  B.textContent="صعودي "+bp+"%";S.textContent="هبوطي "+(100-bp)+"%";
   const bu=Math.round(a.bullPct), dirTxt=bu>=55?"ضغط صعودي "+bu+"%":bu<=45?"ضغط هبوطي "+(100-bu)+"%":"متوازن";
   V.style.color=bu>=55?"var(--up)":bu<=45?"var(--dn)":"var(--dim)";
   V.textContent=a.lead+" يقودون · "+dirTxt;
@@ -2042,10 +2214,12 @@ function renderNow(d){
   document.getElementById("agCS").textContent=Math.round(a.pct.cs)+"%";
   document.getElementById("agF").textContent=K(a.cls)+" عقد مصنّف من "+K(a.all)+" ("+Math.round(a.cover)+"%)"+cvT;
  }
+ // ⓪ القرار
+ try{paintVerdict(decide(d,a.ready?a.bullPct:null),live,d);}catch(e){console.log("verdict",e);}
+ try{if(live&&a.ready)tsRecord(d,a.bullPct);tsDraw();}catch(e){console.log("ts",e);}
  // ② بوابة VWAP
  const g=document.getElementById("gsec"), w=d.vwap;
  if(!w){g.style.display="none";}else{
-  g.style.display="";
   const on=(id,ok,lbl)=>{const e=document.getElementById(id);
    e.style.background=ok?"rgba(45,212,160,.16)":"rgba(255,181,71,.15)";
    e.style.color=ok?"var(--up)":"var(--wr)";e.textContent=lbl+" "+(ok?"مسموح":"انتظر");};
@@ -2060,11 +2234,11 @@ function renderNow(d){
   document.getElementById("gR").textContent="+$"+R.toFixed(2);
  }
  // ③ السلّم
- const L=buildLadder(d);
+ const L=markNearest(buildLadder(d),d.spot);
  document.getElementById("lsrc").textContent=d.em?("حدّا اليوم من "+d.em.src+" "+d.em.iv):"";
  document.getElementById("lad").innerHTML=L.map(x=>x.px
   ?`<div class="lr px"><b>${x.p.toFixed(2)}</b><s>${U} الآن</s><em></em></div>`
-  :`<div class="lr"><b style="color:${x.c}">${x.p.toFixed(x.p>1000?0:2)}</b><s>${x.n} · ${x.t}</s><em>${F1(x.p-d.spot)}</em></div>`).join("");
+  :`<div class="lr"><b style="color:${x.c}">${x.p.toFixed(x.p>1000?0:2)}</b><s>${x.n}${x.tag?`<i style="background:${x.p>d.spot?"rgba(255,181,71,.18);color:var(--wr)":"rgba(255,92,114,.16);color:var(--dn)"}">${x.tag}</i>`:" · "+x.t}</s><em>${F1(x.p-d.spot)}</em></div>`).join("");
 }
 async function load(){
  const B=document.getElementById("body");
