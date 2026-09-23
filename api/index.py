@@ -16,7 +16,11 @@
         انتهت (60 دقيقة) · انعكست (إشارة معاكسة). النهائية لا تتغيّر.
      ③ تقدّم الإشارة الآن + أقصى تقدّم وأقصى تراجع بالنقاط.
      ④ «إشارات اليوم» مطويّة تحتها · تُحفظ في المتصفح لكل أداة وتتصفّر يومياً.
-     ⚠ عرض فقط — منطق القرار لم يتغيّر حرفاً. الحالة تُقاس والصفحة مفتوحة؛
+     ⑤ ثبات القرار يصمد أمام إعادة تحميل الصفحة: حالة التخلّف والتأكيد
+        تُحفظ في المتصفح (عمر ≤ 3 دقائق). كان الجوال يعيد التحميل عند
+        الرجوع للصفحة فيُصفّرها ⇒ PUT عند 10:47 ثم «الضغط متوازن» عند 10:50
+        والضغط 49–51% لم يتغيّر فعلياً.
+     ⚠ لا تغيير في منطق القرار نفسه (العتبات والأهداف كما هي). الحالة تُقاس والصفحة مفتوحة؛
         فجوة > دقيقتين تُعلَّم «الصفحة كانت مغلقة» (قد يفوت لمس هدف أو إبطال).
 
   ㊴ [v2.2] ① /snap يُخرج نطاق اليوم (day_high · day_low · day_range) لتحفظه
@@ -2153,9 +2157,16 @@ function decide(d,bull,fstate){
    ① تخلّف الضغط: +1 عند ≥55 ويبقى حتى <50 · −1 عند ≤45 ويبقى حتى >50.
    ② تأكيد 60 ثانية: القرار الجديد يظهر فقط بعد ثباته دقيقة متصلة. */
 const VS={f:0,cur:null,cand:null,since:0};
+/* [v2.3] حالة الثبات تُحفظ في المتصفح — الجوال يعيد تحميل الصفحة عند الرجوع
+   إليها فكانت تُصفَّر: الضغط 49–52% يصير «متوازن» والقرار يقفز PUT ↔ انتظر.
+   تُستعاد إن كان عمرها < 3 دقائق (أقدم من ذلك = السوق تغيّر ⇒ نبدأ من جديد). */
+const VSK="liq_vs_"+U, VS_TTL=180000;
+try{const o=JSON.parse(localStorage.getItem(VSK));
+ if(o&&Date.now()-o.at<VS_TTL){VS.f=o.f||0;VS.cur=o.cur||null;VS.cand=o.cand||null;VS.since=o.since||0;}}catch(e){}
+function vsSave(){try{localStorage.setItem(VSK,JSON.stringify({f:VS.f,cur:VS.cur,cand:VS.cand,since:VS.since,at:Date.now()}));}catch(e){}}
 const V_CONFIRM=60000;
 function flowHyst(bull){
- if(bull==null){VS.f=0;return 0;}
+ if(bull==null)return 0;   // [v2.3] لا نمسح الحالة حين يتأخر الضغط لحظياً
  if(VS.f===1){ if(bull<50)VS.f=(bull<=45?-1:0); }
  else if(VS.f===-1){ if(bull>50)VS.f=(bull>=55?1:0); }
  else { VS.f=bull>=55?1:bull<=45?-1:0; }
@@ -2379,6 +2390,7 @@ function renderNow(d){
   const raw=decide(d,bu,live?flowHyst(bu):null);
   const sv=live?stableVerdict(raw,Date.now()):{o:raw,pending:null};
   paintVerdict(sv.o,live,d,sv.pending);
+  if(live)vsSave();
   // [v2.3] آخر إشارة — من القرار المؤكَّد فقط · خارج الجلسة تُعرض آخر حالة محفوظة
   try{const day=(d.ts_ny||"").slice(0,10);
    lsPaint(live?lsUpdate(d,sv.o,Date.now()):(day?lsLoad(day):null),d.spot);
