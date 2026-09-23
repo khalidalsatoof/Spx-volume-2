@@ -1,12 +1,21 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.3.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.4)
 ═══════════════════════════════════════════════════════════════════════════════
   خدمة منفصلة عن SPX Paper Bot. لا تتصل به ولا تشاركه قاعدة بيانات ولا حالة.
   ⇒ خطرها على المشروع = صفر. تُنشر وتُوقف وتُعدَّل بحرية تامة.
 
   ── الجديد في v1.8 ──
+  ㊶ [v2.4] القرارات من الخادم أولاً (liq v2.9 على Render)
+     الخادم يحسب القرار نفسه كل 5 ثوانٍ طوال الجلسة ويحفظ كل قرار في
+     liq_snaps (tag = dash_dec) ⇒ البطاقات لا تعتمد على بقاء الصفحة مفتوحة
+     ولا تضيع بتحديثها. تصل عبر /liq_agg (حقل dec) كل 8 ثوانٍ.
+     • الخادم متاح (رد عمره < 30 ث) ⇒ البطاقات منه، وسجلّ المتصفح يعمل
+       بصمت احتياطاً بلا طلب /bars (الخادم يجلب الشموع بنفسه).
+     • الخادم غير متاح ⇒ سجلّ المتصفح وشموع /bars كما في v2.3.1.
+     • القرار في أعلى اللوحة يبقى حساب المتصفح اللحظي (نفس المنطق حرفياً).
+
   ㊵ [v2.3] القرارات النشطة — القرار لم يعد يُمحى حين يعود إلى «انتظر»
      (طلب خالد 23 سبتمبر: قالت PUT ثم «انتظر» فقط فبدا كأن البيانات اختفت).
      ① كل قرار CALL/PUT مؤكَّد (بعد الـ60 ثانية) يُسجَّل برقم يومي: قرار #1، #2…
@@ -1231,7 +1240,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.3.1",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.4",
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
@@ -2302,7 +2311,7 @@ function lsUpdate(d,o,nowMs){
    if(S.list.length>40)S.list=S.list.slice(-40);
   }
  }
- lsSave(S); lsBarsKick(S,nowMs); return S;
+ lsSave(S); if(!srvDec())lsBarsKick(S,nowMs); return S;
 }
 /* [v2.3] شموع الدقيقة من الخادم (Tradier) — كل 30 ثانية لكل قرار نشط.
    تسدّ ما فات والصفحة مغلقة: أعلى/أدنى العقد من الصفقات المنفَّذة فعلاً،
@@ -2361,15 +2370,24 @@ function lsCard(x,mnNow){
   +`<span style="color:var(--dn)">الإبطال ${f(x.inv)} (${sg(x.inv-x.sp)})</span></div>`;
  const mv=dir*(x.spNow-x.sp);
  h+=`<div class="ln">SPX الآن ${sg(mv)} نقطة في اتجاهه (أقصى ${sg(x.mfe||0)} · أسوأ ${sg(x.mae||0)}) · يُحذف بعد ${left} د</div>`;
+ if(x.restored)h+=`<div class="ln">استُعيد بعد إعادة تشغيل الخادم وسُدّت الفجوة بشموع Tradier</div>`;
  if(x.gap&&!x.bOK)h+=`<div class="ln">⚠ الصفحة كانت مغلقة جزءاً من المدة وشموع Tradier لم تصل بعد — الأعلى والأدنى قد لا يكونان كاملين</div>`;
  return h+`</div>`;
+}
+/* [v2.4] قرارات الخادم إن كان رده حديثاً (< 30 ث) — وإلا null */
+function srvDec(){
+ try{ if(SA.d&&Date.now()-SA.at<30000&&SA.d.underlying===U&&Array.isArray(SA.d.dec))return SA.d.dec; }catch(e){}
+ return null;
 }
 function lsPaint(S,d){
  const E=document.getElementById("vL"); if(!E)return;
  let mnNow=0; try{const hm=d.ny_time.split(":").map(Number);mnNow=hm[0]*60+hm[1];}catch(e){}
- const act=(S&&S.list||[]).filter(x=>!x.done&&mnNow-x.mn<LS_MAX_MIN&&mnNow>=x.mn);
+ const srv=srvDec();
+ const act=(srv||(S&&S.list)||[]).filter(x=>!x.done&&mnNow-x.mn<LS_MAX_MIN&&mnNow>=x.mn);
  if(!act.length){E.innerHTML="";E.style.display="none";return;}
- E.innerHTML=act.slice().reverse().map(x=>lsCard(x,mnNow)).join(""); E.style.display="";
+ E.innerHTML=act.slice().reverse().map(x=>lsCard(x,mnNow)).join("")
+  +`<div class="ln" style="text-align:center;margin-top:4px">${srv?"المصدر: الخادم — يعمل والصفحة مغلقة":"المصدر: هذا المتصفح (الخادم غير متاح الآن)"}</div>`;
+ E.style.display="";
 }
 function paintVerdict(o,live,d,pending){
  const W=document.getElementById("vW"),Rr=document.getElementById("vR"),T=document.getElementById("vT");
