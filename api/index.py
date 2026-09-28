@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.5)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.5.1)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊸ [v2.5.1] إصلاحات عرض بوت السيولة (28 سبتمبر)
+     ① الشروط كانت تُعرض متلاصقة في سطر واحد (خطأ CSS: display:block كان داخل
+        البطاقات فقط) ⇒ الآن صندوق لكل اتجاه، كل شرط في سطر، ✗ أحمر / … أصفر /
+        ✓ أخضر، وعدّاد «n/3 شروط»، والصندوق يخضرّ حين تكتمل الثلاثة.
+     ② سطر «المسيطرون الآن: مشترون/بائعون x%» وميل التدفّق فوق الصندوقين.
+     ③ «الخادم غير متاح» كانت تظهر عند فتح الصفحة قبل وصول أول ردّ ⇒ الآن
+        «جارٍ الاتصال…»، و«لا يستجيب» فقط بعد ~دقيقة فشل متواصل · مهلة 8 ث
+        بدل 4 · إعادة رسم الصندوق فور وصول الردّ.
   ㊷ [v2.5] بوت السيولة (يتطلب liq v3.0 على Render)
      ① صندوق «القرار» يعرض بوت السيولة من الخادم بدل منطق الانقلاب والجدران
         (أُزيل من المتصفح): شروط CALL وPUT لحظياً، كل جملة في سطر وبخط أصغر.
@@ -1262,7 +1270,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.5",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.5.1",
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -1623,9 +1631,16 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .lbh{display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:6px}
 .lbh b{font-size:13px}
 .lbst{font-size:10.5px;padding:1px 8px;border-radius:7px;background:rgba(255,255,255,.06);color:var(--dim)}
-.lbc{text-align:right;font-size:10.5px;line-height:1.65;color:var(--dim)}
-.lbc b{font-weight:700}
+.lbc{text-align:right;font-size:11px;line-height:1.6;color:var(--dim)}
+.lbc .l{display:block}
 .lbc .ok{color:var(--up)} .lbc .no{color:var(--dn)} .lbc .wt{color:var(--wr)}
+.lbw{font-size:11px;color:var(--tx);margin-bottom:6px}
+.lbs{margin-top:6px;padding:7px 9px;border-radius:10px;border:1px solid var(--ln);background:rgba(255,255,255,.02)}
+.lbs.go{border-color:var(--up);background:rgba(45,212,160,.08)}
+.lbs .t{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:800;margin-bottom:3px}
+.lbs .t i{font-style:normal;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:7px;background:rgba(255,255,255,.06)}
+.lbs .c{display:flex;justify-content:space-between;gap:8px;font-size:10.5px;line-height:1.7}
+.lbs .c span:last-child{color:var(--dim);white-space:nowrap}
 .lbk{margin-top:8px;padding:8px 9px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid var(--ln);text-align:right;font-size:11px;line-height:1.65}
 .lbk .l{display:block}
 .lbk .d{color:var(--dim);font-size:10.5px}
@@ -2198,10 +2213,13 @@ function aggRead(r){
 const SA={t:0,at:0,d:null};
 function srvAgg(){
  const now=Date.now();
- if(now-SA.t>8000){SA.t=now;
-  const c=new AbortController();setTimeout(()=>c.abort(),4000);
+ if(now-SA.t>8000&&!SA.busy){SA.t=now;SA.busy=true;
+  const c=new AbortController();setTimeout(()=>c.abort(),8000);     // [v2.5.1] 4 ⇒ 8 ث
   fetch(BOT+"/liq_agg",{signal:c.signal}).then(r=>r.json())
-   .then(j=>{if(j&&j.ok){SA.d=j;SA.at=Date.now();}}).catch(()=>{});}
+   .then(j=>{if(j&&j.ok){SA.d=j;SA.at=Date.now();SA.fail=0;
+     try{if(LAST_D)lbPaint(LAST_D,LAST_D.session==="open");}catch(e){}}   // [v2.5.1] رسم فوري
+     else SA.fail=(SA.fail||0)+1;})
+   .catch(()=>{SA.fail=(SA.fail||0)+1;}).finally(()=>{SA.busy=false;});}
  return (SA.d&&now-SA.at<30000&&SA.d.underlying===U)?SA.d:null;
 }
 /* ═══ [v2.5] بوت السيولة — القرار من الخادم (liq v3.0) · قياس لا تنفيذ ═══
@@ -2210,27 +2228,34 @@ function srvAgg(){
 const LB_MAIN_MIN=10, LBK="liq_lb_open";
 let LBOPEN=false; try{LBOPEN=localStorage.getItem(LBK)==="1";}catch(e){}
 function lbData(){ try{ if(SA.d&&Date.now()-SA.at<60000&&SA.d.lb_on!==undefined)return SA.d; }catch(e){} return null; }
-const pct=v=>v==null?"—":((v>=0?"+":"−")+Math.abs(v*100).toFixed(1)+"%");
-const pts=v=>v==null?"—":((v>=0?"+":"−")+Math.abs(v).toFixed(1));
+function lbDown(){ return (SA.fail||0)>=6; }        // [v2.5.1] ~دقيقة من الفشل المتواصل
+const pct=v=>v==null?"—":`<bdi dir="ltr">${(v>=0?"+":"−")+Math.abs(v*100).toFixed(1)}%</bdi>`;   // [v2.5.1] bdi: الإشارة لا تنقلب في RTL
+const pts=v=>v==null?"—":`<bdi dir="ltr">${(v>=0?"+":"−")+Math.abs(v).toFixed(1)}</bdi>`;
 const hm5=t=>(t||"").slice(0,5);
 function lbSecs(t){const p=(t||"").split(":").map(Number);return p.length>=2?p[0]*3600+p[1]*60+(p[2]||0):null;}
 function lbCond(c,r){
- if(!c)return "بانتظار أول قراءة من الخادم";
+ if(!c)return "جارٍ انتظار أول قراءة من الخادم…";
  if(!c.win)return `خارج نافذة الإشارات (09:45–15:00 NY) · الآن ${hm5(c.t)}`;
  const b=c.bull, f=c.flow&&c.flow.bias;
- const L=[];
+ const fv=f==null?"—":`<bdi dir="ltr">${(f>=0?"+":"")+f.toFixed(2)}</bdi>`;
+ let who="المسيطرون الآن: —";
+ if(b!=null)who=b>=50?`المسيطرون الآن: <b class="ok">مشترون ${Math.round(b)}%</b>`:`المسيطرون الآن: <b class="no">بائعون ${Math.round(100-b)}%</b>`;
+ const L=[`<span class="l lbw">${who} · ميل التدفّق ${fv}</span>`];
  for(const side of ["CALL","PUT"]){
   const s=c.st[side]; if(!s)continue;
-  const col=side==="CALL"?"var(--up)":"var(--dn)";
-  const pv=b==null?"—":(side==="CALL"?Math.round(b):Math.round(100-b))+"%";
-  const p=s.p?(s.held>=r.hold?`<span class="ok">✓ المسيطرون ${pv} · ثابت</span>`:`<span class="wt">… المسيطرون ${pv} · ${s.held}/${r.hold} ث</span>`)
-            :`<span class="no">✗ المسيطرون ${pv} (يلزم ≥${side==="CALL"?r.bull:100-r.bear}%)</span>`;
-  const fv=f==null?"—":(f>=0?"+":"")+f.toFixed(2);
-  const fl=s.f?`<span class="ok">✓ التدفّق مشبع عكسها (ميل ${fv})</span>`
-             :`<span class="no">✗ التدفّق (ميل ${fv} · يلزم ${side==="CALL"?"≤ −":"≥ +"}${r.flow.toFixed(2)})</span>`;
-  const rm=s.room==null?`<span class="no">✗ لا عائق معروف لتحديد المساحة</span>`
-          :(s.r?`<span class="ok">✓ المساحة ${s.room} نقطة حتى ${s.obst}</span>`:`<span class="no">✗ المساحة ${s.room} نقطة فقط (${s.obst})</span>`);
-  L.push(`<span class="l"><b style="color:${col}">${side}</b></span><span class="l">${p}</span><span class="l">${fl}</span><span class="l">${rm}</span>`+(s.cool?`<span class="l wt">انتظار ${Math.ceil(s.cool/60)} د بعد إشارة سابقة</span>`:""));
+  const isC=side==="CALL", col=isC?"var(--up)":"var(--dn)";
+  const pv=b==null?"—":`<bdi dir="ltr">${isC?Math.round(b):Math.round(100-b)}%</bdi>`;
+  const held=s.p&&s.held>=r.hold;
+  const row=(cls,mark,txt,val)=>`<span class="c ${cls}"><span>${mark} ${txt}</span><span>${val}</span></span>`;
+  const p=held?row("ok","✓",`${isC?"المشترون":"البائعون"} مسيطرون ${isC?r.bull:100-r.bear}% فأكثر · 60 ث`,`${pv} · ثابت`)
+         :s.p?row("wt","…",`${isC?"المشترون":"البائعون"} مسيطرون ${isC?r.bull:100-r.bear}% فأكثر · 60 ث`,`${pv} · ${s.held}/${r.hold} ث`)
+             :row("no","✗",`${isC?"المشترون":"البائعون"} مسيطرون ${isC?r.bull:100-r.bear}% فأكثر · 60 ث`,`الآن ${pv}`);
+  const fl=row(s.f?"ok":"no",s.f?"✓":"✗",`تدفّق ${isC?"بوت":"كول"} مشبع (ميل ${isC?"−":"+"}${r.flow.toFixed(2)} ${isC?"أو أقل":"أو أكثر"})`,`الآن ${fv}`);
+  const rm=s.room==null?row("no","✗",`مساحة ${r.room} نقاط فأكثر ${isC?"للصعود":"للهبوط"}`,"لا عائق معروف")
+          :row(s.r?"ok":"no",s.r?"✓":"✗",`مساحة ${r.room} نقاط فأكثر ${isC?"للصعود":"للهبوط"}`,`${s.room} · ${s.obst}`);
+  const n=(held?1:0)+(s.f?1:0)+(s.r?1:0);
+  const cool=s.cool?`<span class="c wt"><span>⏳ انتظار بعد إشارة سابقة</span><span>${Math.ceil(s.cool/60)} د</span></span>`:"";
+  L.push(`<div class="lbs${n===3&&!s.cool?" go":""}"><span class="t"><span style="color:${col}">${side}</span><i>${n}/3 شروط</i></span>${p}${fl}${rm}${cool}</div>`);
  }
  return L.join("");
 }
@@ -2251,7 +2276,7 @@ function lbCard(x,r){
  }else{
   L.push(`<span class="l">الخروج ${hm5(x.exit_t)} · $${Number(x.exit_mid).toFixed(2)} · ${x.reason} · ${pct(x.pnl_mid)} (واقعي ${pct(x.pnl_real)})</span>`);
  }
- const tg=[10,15,20].map(T=>x["t"+T]?`<span class="ok">${T} ✓ ${hm5(x["t"+T])}</span>`:`${T} —`).join(" · ");
+ const tg=[10,15,20].map(T=>x["t"+T]?`<span class="ok">${T} ✓ ${hm5(x["t"+T])}</span>`:`${T} ✗`).join(" · ");
  L.push(`<span class="l">SPX ${Number(x.sp).toFixed(1)} · الآن ${pts((x.side==="CALL"?1:-1)*(x.spnow-x.sp))} · أقصى ${pts(x.mfe)} · أسوأ ${pts(x.mae)}</span>`);
  L.push(`<span class="l">أهداف SPX: ${tg}${x.end==="open"?" · يُقاس حتى 60 د":""}</span>`);
  for(const w of (x.why||[]))L.push(`<span class="l d">· ${w}</span>`);
@@ -2271,7 +2296,7 @@ function lbPaint(d,live){
  const Cl=document.getElementById("lbCalls");
  if(!St)return;
  const vc=d&&d.calls_min!=null?d.calls_min:null;
- if(!D){St.textContent="الخادم غير متاح";C.textContent="لا بيانات من liq v3.0 بعد";Nw.innerHTML="";Bt.style.display="none";Ls.classList.add("hide");
+ if(!D){St.textContent=lbDown()?"الخادم لا يستجيب":"جارٍ الاتصال…";C.textContent=lbDown()?"لا ردّ من الخادم منذ دقيقة — تحقّق من /health":"جارٍ جلب حالة البوت من الخادم…";Nw.innerHTML="";Bt.style.display="none";Ls.classList.add("hide");
   Cl.textContent=vc!=null?`نداءات Tradier/د · اللوحة ${vc}`:"";return;}
  if(!D.lb_on){St.textContent="موقوف";C.textContent="LB_ENABLED=0 على الخادم";Nw.innerHTML="";Bt.style.display="none";return;}
  const r=D.lb_rules||{}, T=D.lb_trades||[], c=D.lb_cond;
