@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.5.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.6)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊹ [v2.6] (يتطلب liq v3.1) — سرعة وثبات + مستويات الجلسة
+     ① دورة التحديث: طلب واحد في كل مرة (لا تراكم مهما تأخّر الردّ)، الموعد التالي
+        بعد 5 ث من بدء السابق، مهلة 8 ث لكل طلب · التحديث كل 5 ث على الأكثر
+        (معامل r محدود بـ3–5) · فشل عابر لا يمسح الصفحة: يبقى آخر عرض ويظهر تنبيه.
+     ② السلّم: قمة الجلسة وقاعها ومنتصفها · الحركة المتبقية (ستراددل ATM ±) ·
+        حالة كل منطقة عرض/طلب بكلمات: لم تُختبر · اختُبرت HH:MM ×n وصمدت ·
+        السعر داخلها الآن · تجاوزها (كسر محتمل) · كُسرت HH:MM ⇒ استمرار.
+     ③ الرأس: «المتبقي ±X» بجانب VIX · البطاقة: أعلى/أدنى العقد خلال 60 د.
   ㊸ [v2.5.1] إصلاحات عرض بوت السيولة (28 سبتمبر)
      ① الشروط كانت تُعرض متلاصقة في سطر واحد (خطأ CSS: display:block كان داخل
         البطاقات فقط) ⇒ الآن صندوق لكل اتجاه، كل شرط في سطر، ✗ أحمر / … أصفر /
@@ -1270,7 +1278,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.5.1",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.6",
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -1369,7 +1377,7 @@ def _page(u, n, r):
     u = u.upper() if u.upper() in UNDERLYINGS else "SPY"
     other = "SPX" if u == "SPY" else "SPY"
     n = max(3, min(n or LIQ_STRIKES, 30))
-    r = max(3, min(r, 300))
+    r = max(3, min(r, 5))                   # [v2.6] التحديث كل 5 ث على الأكثر في الجلسة
     picks = "".join(
         f'<a class="np{" on" if x == n else ""}" href="/?u={u}&n={x}&r={r}">{x}</a>'
         for x in (5, 8, 10, 12, 15, 20, 30))
@@ -2268,7 +2276,9 @@ function lbCard(x,r){
  L.push(`<span class="h"><span>#${x.id} <span style="color:${col}">${x.side}</span> · ${hm5(x.t)} NY · ${x.tk} KSA · ${x.grade}</span><span class="st" style="background:${sb};color:${sc}">${st}</span></span>`);
  L.push(`<span class="l">العقد ${x.side} ${x.ck} · دخول $${Number(x.c0).toFixed(2)} (العرض $${Number(x.ca0).toFixed(2)})${x.cband==="NO"?" · ⚠ خارج نطاق $3.90–4.50":""}</span>`);
  if(open)L.push(`<span class="l">الآن <b>$${Number(x.cnow).toFixed(2)} (${pct(x.pnl_now)})</b></span>`);
- L.push(`<span class="l">الأعلى $${Number(x.chi).toFixed(2)} (${pct(x.chi/x.c0-1)}) ${hm5(x.chi_t)} · الأدنى $${Number(x.clo).toFixed(2)} (${pct(x.clo/x.c0-1)}) ${hm5(x.clo_t)}</span>`);
+ L.push(`<span class="l">أثناء الصفقة: أعلى $${Number(x.chi).toFixed(2)} (${pct(x.chi/x.c0-1)}) ${hm5(x.chi_t)} · أدنى $${Number(x.clo).toFixed(2)} (${pct(x.clo/x.c0-1)}) ${hm5(x.clo_t)}</span>`);
+ if(x.whi!=null&&x.wlo!=null)                         // [v2.6] نافذة الستين دقيقة (تستمر بعد الخروج)
+  L.push(`<span class="l">خلال 60 د: أعلى $${Number(x.whi).toFixed(2)} (${pct(x.whi/x.c0-1)}) ${hm5(x.whi_t)} · أدنى $${Number(x.wlo).toFixed(2)} (${pct(x.wlo/x.c0-1)}) ${hm5(x.wlo_t)}${!open&&x.end==="open"&&x.cnow!=null?` · الآن $${Number(x.cnow).toFixed(2)}`:""}</span>`);
  if(open){
   L.push(`<span class="l d">الوقف $${(x.c0*(1-r.sl)).toFixed(2)} (−${Math.round(r.sl*100)}%)</span>`);
   L.push(x.armed?`<span class="l d">مُسلَّح ${hm5(x.arm_t)} · يخرج إن نزل إلى $${(x.peak*(1-r.trail)).toFixed(2)} (−${Math.round(r.trail*100)}% من الذروة $${Number(x.peak).toFixed(2)})</span>`
@@ -2288,7 +2298,7 @@ function lbRow(x){
  const tg=[10,15,20].map(T=>x["t"+T]?`${T}✓${hm5(x["t"+T])}`:`${T}✗`).join(" ");
  return `<span class="lbr"><b>#${x.id} <span style="color:${col}">${x.side}</span></b> ${hm5(x.t)} → ${hm5(x.exit_t)} · ${x.reason} `
   +`<b style="color:${w?"var(--up)":"var(--dn)"}">${pct(x.pnl_mid)}</b> (واقعي ${pct(x.pnl_real)}) · ${x.grade}<br>`
-  +`<span style="color:var(--dim)">SPX ${tg} · أقصى ${pts(x.mfe)} · أسوأ ${pts(x.mae)}${x.end==="open"?" · يُقاس":""}</span></span>`;
+  +`<span style="color:var(--dim)">SPX ${tg} · أقصى ${pts(x.mfe)} · أسوأ ${pts(x.mae)}${x.whi!=null?` · العقد خلال 60 د: ${pct(x.whi/x.c0-1)} / ${pct(x.wlo/x.c0-1)}`:""}${x.end==="open"?" · يُقاس":""}</span></span>`;
 }
 function lbPaint(d,live){
  const D=lbData(), St=document.getElementById("lbSt"), C=document.getElementById("lbC");
@@ -2389,6 +2399,13 @@ function markNearest(L,sp){
  if(up)up.tag="مقاومة مباشرة"; if(dn)dn.tag="دعم مباشر";
  return L;
 }
+function zoneTag(z){                                // [v2.6] حالة المنطقة بكلمات
+ if(z.broken)return `كُسرت ${z.broken} ⇒ ${z.kind==="demand"?"استمرار الهبوط":"استمرار الصعود"}`;
+ const ts=z.tested?`اختُبرت ${z.tested}${z.tests>1?` ×${z.tests}`:""} وصمدت`:"لم تُختبر بعد";
+ const lv=z.live==="inside"?" · السعر داخلها الآن"
+         :(z.live==="below"||z.live==="above")?" · السعر تجاوزها — كسر محتمل مع إغلاق الشمعة":"";
+ return `5د · ${ts}${lv}`;
+}
 function buildLadder(d){
  const L=[], P0=d.pos||{}, sp=d.spot;
  if(d.em){L.push({p:d.em.hi,n:"حدّ اليوم ↑",t:"صمد 86–93%",c:"var(--dim)"});
@@ -2397,10 +2414,21 @@ function buildLadder(d){
  if(P0.put_wall)L.push({p:P0.put_wall,n:"جدار غاما PUT",t:"غير مختبَر",c:"var(--dn)"});
  if(P0.flip)L.push({p:P0.flip,n:"الانقلاب",t:sp>=P0.flip?"فوقه: كبح":"تحته: تضخيم",c:"var(--wr)"});
  if(d.vwap)L.push({p:d.vwap.vwap_und,n:"VWAP",t:"من SPY",c:"var(--ac)"});
- try{const Z=(lbData()||{}).lb_zones||[];                       // [v2.5]
-  if(U==="SPX")for(const z of Z){ if(z.broken)continue;
-   L.push({p:(z.lo+z.hi)/2,n:(z.kind==="demand"?"منطقة طلب ":"منطقة عرض ")+z.lo.toFixed(0)+"–"+z.hi.toFixed(0),
-           t:"5د · "+z.t,c:z.kind==="demand"?"var(--up)":"var(--dn)"}); } }catch(e){}
+ try{ const LD=lbData()||{};                                   // [v2.6] من الخادم (SPX)
+  if(U==="SPX"){
+   const ss=LD.lb_session;
+   if(ss){L.push({p:ss.hi,n:"قمة الجلسة",t:"من 09:30",c:"var(--up)"});
+          L.push({p:ss.lo,n:"قاع الجلسة",t:"من 09:30",c:"var(--dn)"});
+          L.push({p:ss.mid,n:"منتصف الجلسة",t:"(القمة + القاع) ÷ 2",c:"var(--dim)"});}
+   const sd=LD.lb_strad;
+   if(sd&&sp){L.push({p:sp+sd.v,n:"الحركة المتبقية ↑",t:`±${sd.v.toFixed(1)} · ستراددل ${sd.k.toFixed(0)}`,c:"var(--dim)"});
+              L.push({p:sp-sd.v,n:"الحركة المتبقية ↓",t:`±${sd.v.toFixed(1)} · ستراددل ${sd.k.toFixed(0)}`,c:"var(--dim)"});}
+   for(const z of (LD.lb_zones||[])){
+    const m=(z.lo+z.hi)/2;
+    if(z.broken&&Math.abs(m-sp)>40)continue;       // المكسورة البعيدة لا تزاحم السلّم
+    L.push({p:m,n:(z.kind==="demand"?"منطقة طلب ":"منطقة عرض ")+z.lo.toFixed(0)+"–"+z.hi.toFixed(0),
+            t:zoneTag(z),c:z.broken?"var(--dim)":z.kind==="demand"?"var(--up)":"var(--dn)"});
+   } } }catch(e){}
  L.push({p:sp,n:"السعر",t:"",c:"",px:true});
  return L.filter(x=>x.p!=null&&isFinite(x.p)).sort((a,b)=>b.p-a.p);
 }
@@ -2469,13 +2497,27 @@ function renderNow(d){
  document.getElementById("lsrc").textContent=d.em?("حدّا اليوم من "+d.em.src+" "+d.em.iv):"";
  document.getElementById("lad").innerHTML=L.map(x=>x.px
   ?`<div class="lr px"><b>${x.p.toFixed(2)}</b><s>${U} الآن</s><em></em></div>`
-  :`<div class="lr"><b style="color:${x.c}">${x.p.toFixed(x.p>1000?0:2)}</b><s>${x.n}${x.tag?`<i style="background:${x.p>d.spot?"rgba(255,181,71,.18);color:var(--wr)":"rgba(255,92,114,.16);color:var(--dn)"}">${x.tag}</i>`:" · "+x.t}</s><em>${F1(x.p-d.spot)}</em></div>`).join("");
+  :`<div class="lr"><b style="color:${x.c}">${x.p.toFixed(x.p>1000?0:2)}</b><s>${x.n}${x.tag?`<i style="background:${x.p>d.spot?"rgba(255,181,71,.18);color:var(--wr)":"rgba(255,92,114,.16);color:var(--dn)"}">${x.tag}</i>`:""}${x.t?" · "+x.t:""}</s><em>${F1(x.p-d.spot)}</em></div>`).join("");
+}
+let HAVE=false;                                     // [v2.6] هل رُسمت بيانات ولو مرة
+async function fetchJ(url,ms){                       // [v2.6] جلب بمهلة — لا تعليق
+ const c=new AbortController(), t=setTimeout(()=>c.abort(),ms);
+ try{ const r=await fetch(url,{signal:c.signal,cache:"no-store"}); return await r.json(); }
+ finally{ clearTimeout(t); }
+}
+function stale(msg){                                  // [v2.6] فشل عابر: أبقِ آخر عرض ونبّه فقط
+ const ts=document.getElementById("ts");
+ if(ts)ts.innerHTML=`<span style="color:var(--wr)">⚠ ${msg} — إعادة المحاولة</span>`;
 }
 async function load(){
  const B=document.getElementById("body");
  try{
-  const d=await (await fetch(`/json?u=${U}&n=${N}`)).json();
-  if(!d.ok){B.innerHTML=`<div class="err">⚠ ${d.err||"تعذّر الجلب"}</div>`;return;}
+  let d;
+  try{ d=await fetchJ(`/json?u=${U}&n=${N}`,8000); }
+  catch(e){ if(HAVE){stale("تأخّر ردّ الخادم");return;} throw e; }
+  if(!d.ok){ if(HAVE){stale(d.err||"تعذّر الجلب");return;}
+   B.innerHTML=`<div class="err">⚠ ${d.err||"تعذّر الجلب"}</div>`;return;}
+  HAVE=true;
   // ── السعر ولونه ونسبة التغيّر ──
   const sp=document.getElementById("spot"),cg=document.getElementById("chg");
   sp.textContent=Number(d.spot).toFixed(2);
@@ -2512,6 +2554,8 @@ async function load(){
   }else rg.style.display="none";
   let vtx=d.vix?("VIX "+d.vix):"";
   if(d.vix1d)vtx+=(vtx?" · ":"")+"0D "+d.vix1d;
+  try{const sd=(lbData()||{}).lb_strad;              // [v2.6]
+   if(U==="SPX"&&live&&sd)vtx+=(vtx?" · ":"")+"المتبقي ±"+sd.v.toFixed(1);}catch(e){}
   document.getElementById("vix").textContent=vtx;
   document.getElementById("ts").textContent=d.ny_time+" نيويورك";
   const sb=document.getElementById("ses"),sc=SES[d.session]||SES.closed;
@@ -2617,19 +2661,23 @@ async function load(){
     <span class="v ${c.oi>=2000?"solid":(c.oi<500?"thin":"")}">${K(c.oi)}</span>
     <span class="g ${hot?"hot":""}">${gt}</span></div>`;
   }).join("");
- }catch(e){B.innerHTML=`<div class="err">⚠ ${e}</div>`;}
+ }catch(e){ if(HAVE)stale("خطأ في العرض"); else B.innerHTML=`<div class="err">⚠ ${e}</div>`; console.log("load",e);}
 }
-// ── دورة التحديث: تتوقف عند إخفاء الصفحة (توفير بطارية) ──
-let TIMER=null,CUR=null;
-// [v1.3] خارج الجلسة لا شيء يتحرك ⇒ دورة بطيئة (60 ثانية) بدل 5 ثوانٍ.
-//        يوفّر بطارية واستدعاءات بلا أي فقد في المعلومة.
-function arm(sec){
- if(TIMER&&CUR===sec)return;
- if(TIMER)clearInterval(TIMER);
- CUR=sec; TIMER=setInterval(load,sec*1000);
+// ── دورة التحديث [v2.6] ──
+// تحديث واحد في كل مرة (لا تراكم مهما تأخّر الردّ) · الموعد التالي = 5 ث من بدء
+// السابق (أو فوراً إن تأخّر) · الجلسة مغلقة ⇒ كل 60 ث · الصفحة في الخلفية ⇒ توقف
+// تام (البوت والجامع في الخادم لا يتأثران) ثم تحديث فوري عند العودة.
+let TIMER=null,CUR=null,INFL=false;
+async function tick(){
+ if(INFL)return; INFL=true; const t0=Date.now();
+ try{ await load(); }catch(e){ console.log("tick",e); }
+ finally{ INFL=false; }
+ if(document.hidden||CUR==null)return;
+ clearTimeout(TIMER); TIMER=setTimeout(tick,Math.max(200,CUR*1000-(Date.now()-t0)));
 }
-function stop(){if(TIMER){clearInterval(TIMER);TIMER=null;CUR=null;}}
-function start(){load();arm(R);}
+function arm(sec){CUR=sec;}
+function stop(){clearTimeout(TIMER);TIMER=null;}
+function start(){stop();if(CUR==null)CUR=R;tick();}
 function pace(session){arm(session==="open"?R:60);}
 document.addEventListener("visibilitychange",()=>{document.hidden?stop():start();});
 start();
