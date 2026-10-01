@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.6)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.7)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊺ [v2.7] (مع liq v3.2) شرط التدفّق في صندوق بوت السيولة يُعرض بالفرق عن الميل
+     المعتاد: «ميل التدفّق · المعتاد · الفرق» (و«احتياطي» إن لم تكتمل نافذة 90 د) ·
+     الشرط يُقرأ «الفرق عن المعتاد ±0.20». مع LB_FLOW_MODE=abs يعود العرض القديم.
   ㊹ [v2.6] (يتطلب liq v3.1) — سرعة وثبات + مستويات الجلسة
      ① دورة التحديث: طلب واحد في كل مرة (لا تراكم مهما تأخّر الردّ)، الموعد التالي
         بعد 5 ث من بدء السابق، مهلة 8 ث لكل طلب · التحديث كل 5 ث على الأكثر
@@ -1278,7 +1281,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.6",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.7",
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -2244,11 +2247,15 @@ function lbSecs(t){const p=(t||"").split(":").map(Number);return p.length>=2?p[0
 function lbCond(c,r){
  if(!c)return "جارٍ انتظار أول قراءة من الخادم…";
  if(!c.win)return `خارج نافذة الإشارات (09:45–15:00 NY) · الآن ${hm5(c.t)}`;
- const b=c.bull, f=c.flow&&c.flow.bias;
- const fv=f==null?"—":`<bdi dir="ltr">${(f>=0?"+":"")+f.toFixed(2)}</bdi>`;
+ const b=c.bull, rel=(r.flow_mode||"rel")!=="abs";                 // [v2.7] التشبّع نسبةً للمعتاد
+ const raw=c.flow&&c.flow.bias, base=c.flow&&c.flow.base;
+ const f=c.flow?(rel&&c.flow.rel!=null?c.flow.rel:raw):null;
+ const sg=v=>v==null?"—":`<bdi dir="ltr">${(v>=0?"+":"")+v.toFixed(2)}</bdi>`;
+ const fv=sg(f);
  let who="المسيطرون الآن: —";
  if(b!=null)who=b>=50?`المسيطرون الآن: <b class="ok">مشترون ${Math.round(b)}%</b>`:`المسيطرون الآن: <b class="no">بائعون ${Math.round(100-b)}%</b>`;
- const L=[`<span class="l lbw">${who} · ميل التدفّق ${fv}</span>`];
+ const L=[`<span class="l lbw">${who}</span>`,
+  `<span class="l lbw">ميل التدفّق ${sg(raw)}${rel&&base!=null?` · المعتاد ${sg(base)}${c.flow.base_src==="fallback"?" (احتياطي)":""} · الفرق ${fv}`:""}</span>`];
  for(const side of ["CALL","PUT"]){
   const s=c.st[side]; if(!s)continue;
   const isC=side==="CALL", col=isC?"var(--up)":"var(--dn)";
@@ -2258,7 +2265,7 @@ function lbCond(c,r){
   const p=held?row("ok","✓",`${isC?"المشترون":"البائعون"} مسيطرون ${isC?r.bull:100-r.bear}% فأكثر · 60 ث`,`${pv} · ثابت`)
          :s.p?row("wt","…",`${isC?"المشترون":"البائعون"} مسيطرون ${isC?r.bull:100-r.bear}% فأكثر · 60 ث`,`${pv} · ${s.held}/${r.hold} ث`)
              :row("no","✗",`${isC?"المشترون":"البائعون"} مسيطرون ${isC?r.bull:100-r.bear}% فأكثر · 60 ث`,`الآن ${pv}`);
-  const fl=row(s.f?"ok":"no",s.f?"✓":"✗",`تدفّق ${isC?"بوت":"كول"} مشبع (ميل ${isC?"−":"+"}${r.flow.toFixed(2)} ${isC?"أو أقل":"أو أكثر"})`,`الآن ${fv}`);
+  const fl=row(s.f?"ok":"no",s.f?"✓":"✗",`تدفّق ${isC?"بوت":"كول"} مشبع (${rel?"الفرق عن المعتاد":"الميل"} ${isC?"−":"+"}${r.flow.toFixed(2)} ${isC?"أو أقل":"أو أكثر"})`,`الآن ${fv}`);
   const rm=s.room==null?row("no","✗",`مساحة ${r.room} نقاط فأكثر ${isC?"للصعود":"للهبوط"}`,"لا عائق معروف")
           :row(s.r?"ok":"no",s.r?"✓":"✗",`مساحة ${r.room} نقاط فأكثر ${isC?"للصعود":"للهبوط"}`,`${s.room} · ${s.obst}`);
   const n=(held?1:0)+(s.f?1:0)+(s.r?1:0);
