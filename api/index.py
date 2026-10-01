@@ -1,8 +1,25 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.7)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.8)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊻ [v2.8] (يتطلب liq v3.3) — المسيطرون لحظياً (طلب خالد 2 أكتوبر)
+     ① قراءة /liq_agg من Render كل 2 ث في الجلسة (30 ث خارجها) بحلقة مستقلة: طلب
+        واحد في كل مرة، مهلة 5 ث، تتوقف في الخلفية وتعود فوراً. لا تُحسب من نداءات
+        Tradier (الخادم يجمع كل 3 ث).
+     ② رسم «المسيطرون» جديد: مقياس ثابت 20–80% ومحور أيسر بالمستويات −3…+3 (كل
+        مستوى 10%) · خطّا عتبة البوت 55/45 · ذروة اليوم وقاعه برقمهما ووقتهما · بلا
+        تنعيم (كان متوسط 5 نقاط فوق نافذة 5 د ⇒ تأخّر 7–9 د).
+     ③ نافذة «اللحظي · آخر 15 د»: خط دقيقة واحدة (للعرض) فوق خط الخمس دقائق (شرط
+        البوت) · الرقم الكبير من خط الدقيقة · «التأخير» محسوب: عمر آخر دورة في الخادم
+        + نصف زمن الطلب + منذ الوصول، يُحدَّث كل ثانية (أخضر ≤5 · أصفر ≤10 · أحمر).
+     ④ إصلاح: الرسم كان يُرسم قبل وصول ردّ الخادم ولا يُعاد حتى الدورة التالية (60 ث
+        خارج الجلسة) فيظهر من نقاط المتصفح وحدها بفجوات ⇒ يُعاد الرسم فور كل ردّ.
+     ⑤ تشخيص الانقطاع: يُسجَّل نوع كل فشل (مهلة · شبكة · HTTP · رد غير صالح) ويظهر
+        سطر «انقطاع الخادم» تحت الرسم إن وقع فشل في آخر 10 د · «لا يستجيب» بعد 60 ث
+        بلا ردّ ناجح (بدل 6 فشلات متتالية).
+     ⑥ تحديث /json (السلسلة والسلّم) كل 8 ث افتراضياً (المعامل r من 5 إلى 15) بدل 5 —
+        يوفّر ~10 نداءات Tradier/د لصالح دورة الجامع الأسرع.
   ㊺ [v2.7] (مع liq v3.2) شرط التدفّق في صندوق بوت السيولة يُعرض بالفرق عن الميل
      المعتاد: «ميل التدفّق · المعتاد · الفرق» (و«احتياطي» إن لم تكتمل نافذة 90 د) ·
      الشرط يُقرأ «الفرق عن المعتاد ±0.20». مع LB_FLOW_MODE=abs يعود العرض القديم.
@@ -1281,7 +1298,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.7",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.8",
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -1380,7 +1397,7 @@ def _page(u, n, r):
     u = u.upper() if u.upper() in UNDERLYINGS else "SPY"
     other = "SPX" if u == "SPY" else "SPY"
     n = max(3, min(n or LIQ_STRIKES, 30))
-    r = max(3, min(r, 5))                   # [v2.6] التحديث كل 5 ث على الأكثر في الجلسة
+    r = max(5, min(r or 8, 15))             # [v2.8] /json كل 8 ث افتراضياً (5–15) — المسيطرون كل 2 ث
     picks = "".join(
         f'<a class="np{" on" if x == n else ""}" href="/?u={u}&n={x}&r={r}">{x}</a>'
         for x in (5, 8, 10, 12, 15, 20, 30))
@@ -1390,14 +1407,14 @@ def _page(u, n, r):
 
 
 @app.get("/", response_class=HTMLResponse)
-def dash(u: str = "SPY", n: int = 0, r: int = 5):
+def dash(u: str = "SPY", n: int = 0, r: int = 8):
     return _page(u, n, r)
 
 
 # مسار احتياطي: بعض إعدادات فيرسل تمرّر المسار الكامل للدالة.
 # يلتقط أي مسار غير معروف ويوجّهه بحسب نهايته — يجب أن يبقى الأخير.
 @app.get("/{full_path:path}", response_class=HTMLResponse)
-def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 5,
+def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 8,
               opt: str = "", und: str = "SPX", start: str = ""):
     p = "/" + (full_path or "").strip("/")
     if p.endswith("/bars"):                                   # [v2.3]
@@ -1671,8 +1688,14 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .ls .ln{color:var(--dim);font-size:11px}
 details.adv{margin-bottom:9px}
 .ts{margin:0 0 10px}
-.ts svg{width:100%;height:96px;display:block;background:linear-gradient(180deg,rgba(45,212,160,.05),rgba(255,255,255,.015) 50%,rgba(255,92,114,.05));border-radius:10px}
-.tsl{direction:ltr;display:flex;justify-content:space-between;font-size:9.5px;color:var(--ft);margin-top:3px}
+.ts svg{width:100%;height:auto;display:block;direction:ltr;background:rgba(255,255,255,.015);border-radius:10px}
+.tsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:2px 0 5px}
+.tsh b{font-size:19px;font-weight:700}
+.tsh i{font-style:normal;font-size:10.5px;color:var(--dim)}
+.tsh u{text-decoration:none;font-size:10.5px;font-weight:700;margin-inline-start:auto}
+.tsk{display:flex;gap:10px;flex-wrap:wrap;font-size:9.5px;color:var(--ft);margin-top:4px}
+.tsk s{text-decoration:none;display:inline-block;width:13px;height:3px;border-radius:2px;vertical-align:middle;margin-inline-end:4px}
+.tse{font-size:9.5px;color:var(--wr);margin-top:3px}
 .lr i{font-style:normal;font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;margin-inline-start:4px}
 details.adv>summary{cursor:pointer;list-style:none;text-align:center;font-size:12px;color:var(--dim);padding:9px;border:1px dashed var(--ln);border-radius:12px;margin-bottom:9px}
 details.adv>summary::-webkit-details-marker{display:none}
@@ -1713,9 +1736,13 @@ details.adv[open]>summary{color:var(--tx)}
   <div class="vg">قياس فقط · لا تنفيذ · غير مختبَر</div>
   <div class="lbcl" id="lbCalls"></div>
  </div>
- <div class="ts"><div class="nlb"><span>قوة الاتجاه · الضغط الصعودي عبر اليوم</span><span id="tsn" style="font-size:9.5px"></span></div>
-  <svg id="tsv" viewBox="0 0 390 96" preserveAspectRatio="none"></svg>
-  <div class="tsl"><span>09:30</span><span>11:00</span><span>12:30</span><span>14:00</span><span>16:00</span></div></div>
+ <div class="ts"><div class="nlb"><span>المسيطرون · اليوم</span><span id="tsn" style="font-size:9.5px">مقياس ثابت 20–80%</span></div>
+  <div class="tsh"><b id="tsBig" style="color:var(--dim)">—</b><i id="tsLvl"></i><u id="tsAge"></u></div>
+  <svg id="tsv" viewBox="0 0 350 176"></svg>
+  <div class="nlb" style="margin-top:8px"><span>اللحظي · آخر 15 دقيقة</span><span id="tsfn" style="font-size:9.5px"></span></div>
+  <svg id="tsf" viewBox="0 0 350 120"></svg>
+  <div class="tsk"><span><s style="background:#4a90ff"></s>5 د (شرط البوت)</span><span><s style="background:#ffb547"></s>دقيقة (للعرض)</span><span>منقّط = عتبة 55/45</span></div>
+  <div class="tse" id="tsErr"></div></div>
  <div class="nsec">
   <div class="nlb"><span>الضغط · آخر 5 دقائق (للتوقيت فقط)</span><span class="ntag">غير مختبَر</span></div>
   <div class="agb"><u id="agB" style="width:50%;background:#2dd4a0;color:#06251b">صعودي —</u>
@@ -2221,16 +2248,34 @@ function aggRead(r){
 /* [v1.9.3] المسيطر من الخادم — جامع liq v2.7 كل 5 ثوانٍ طوال الجلسة.
    يُسأل كل 8 ثوانٍ، والرد يُعتبر صالحاً 30 ثانية. عند أي فشل يبقى
    حساب المتصفح كما هو. */
-const SA={t:0,at:0,d:null};
+/* [v2.8] حلقة مستقلة: /liq_agg كل 2 ث في الجلسة (30 ث خارجها) · طلب واحد في كل
+   مرة · مهلة 5 ث · تتوقف في الخلفية · كل فشل يُسجَّل بنوعه للتشخيص. */
+const SA={t:0,at:0,d:null,busy:false,fail:0,t0:Date.now(),rtt:null,errs:[]};
+const AGP_LIVE=2000, AGP_IDLE=30000;
+let AGT=null;
+function agPoll(){
+ clearTimeout(AGT);AGT=null;
+ if(document.hidden)return;
+ if(SA.busy){AGT=setTimeout(agPoll,500);return;}
+ SA.busy=true;SA.t=Date.now();
+ const c=new AbortController(), to=setTimeout(()=>c.abort(),5000), t0=Date.now();
+ fetch(BOT+"/liq_agg",{signal:c.signal,cache:"no-store"})
+  .then(r=>{if(!r.ok)throw {k:"HTTP "+r.status};return r.json();})
+  .then(j=>{if(!(j&&j.ok))throw {k:"رد غير صالح"};
+   SA.d=j;SA.at=Date.now();SA.fail=0;SA.rtt=Date.now()-t0;
+   try{if(LAST_D)lbPaint(LAST_D,LAST_D.session==="open");}catch(e){}
+   try{tsDraw();}catch(e){console.log("ts",e);}})
+  .catch(e=>{SA.fail++;
+   const k=(e&&e.k)||((e&&e.name==="AbortError")?"مهلة":"شبكة");
+   SA.errs.push([Date.now(),k]);if(SA.errs.length>60)SA.errs.shift();
+   try{tsErr();}catch(x){}})
+  .finally(()=>{clearTimeout(to);SA.busy=false;
+   if(document.hidden)return;
+   const live=!LAST_D||LAST_D.session==="open";
+   clearTimeout(AGT);AGT=setTimeout(agPoll,live?AGP_LIVE:AGP_IDLE);});
+}
 function srvAgg(){
  const now=Date.now();
- if(now-SA.t>8000&&!SA.busy){SA.t=now;SA.busy=true;
-  const c=new AbortController();setTimeout(()=>c.abort(),8000);     // [v2.5.1] 4 ⇒ 8 ث
-  fetch(BOT+"/liq_agg",{signal:c.signal}).then(r=>r.json())
-   .then(j=>{if(j&&j.ok){SA.d=j;SA.at=Date.now();SA.fail=0;
-     try{if(LAST_D)lbPaint(LAST_D,LAST_D.session==="open");}catch(e){}}   // [v2.5.1] رسم فوري
-     else SA.fail=(SA.fail||0)+1;})
-   .catch(()=>{SA.fail=(SA.fail||0)+1;}).finally(()=>{SA.busy=false;});}
  return (SA.d&&now-SA.at<30000&&SA.d.underlying===U)?SA.d:null;
 }
 /* ═══ [v2.5] بوت السيولة — القرار من الخادم (liq v3.0) · قياس لا تنفيذ ═══
@@ -2239,7 +2284,7 @@ function srvAgg(){
 const LB_MAIN_MIN=10, LBK="liq_lb_open";
 let LBOPEN=false; try{LBOPEN=localStorage.getItem(LBK)==="1";}catch(e){}
 function lbData(){ try{ if(SA.d&&Date.now()-SA.at<60000&&SA.d.lb_on!==undefined)return SA.d; }catch(e){} return null; }
-function lbDown(){ return (SA.fail||0)>=6; }        // [v2.5.1] ~دقيقة من الفشل المتواصل
+function lbDown(){ return (SA.fail||0)>=3&&Date.now()-(SA.at||SA.t0)>60000; }   // [v2.8] 60 ث بلا ردّ ناجح
 const pct=v=>v==null?"—":`<bdi dir="ltr">${(v>=0?"+":"−")+Math.abs(v*100).toFixed(1)}%</bdi>`;   // [v2.5.1] bdi: الإشارة لا تنقلب في RTL
 const pts=v=>v==null?"—":`<bdi dir="ltr">${(v>=0?"+":"−")+Math.abs(v).toFixed(1)}</bdi>`;
 const hm5=t=>(t||"").slice(0,5);
@@ -2351,52 +2396,111 @@ function tsRecord(d,bull){
  if(o.p.length>400)o.p=o.p.slice(-400);
  try{localStorage.setItem(TSK,JSON.stringify(o));}catch(e){}
 }
+/* [v2.8] رسم المسيطرين: مقياس ثابت 20–80% · مستويات −3…+3 (كل مستوى 10%) ·
+   عتبة البوت 55/45 · ذروة/قاع اليوم · نافذة لحظية لآخر 15 د من الخادم (SPX). */
+const TS_LO=20,TS_HI=80,TS_X0=50,TS_W=294;
+const tsY=(b,y0,h)=>y0+(TS_HI-Math.max(TS_LO,Math.min(TS_HI,b)))/(TS_HI-TS_LO)*h;
+const tsLv=b=>{const v=(b-50)/10;return (v>=0?"+":"−")+Math.abs(v).toFixed(1);};
+const tsTxt=b=>{const v=Math.round(b);return v>=50?"صعودي "+v+"%":"هبوطي "+(100-v)+"%";};
+const tsCol=b=>b>=55?"var(--up)":b<=45?"var(--dn)":"var(--tx)";
+function tsAxis(y0,h){
+ let s="";
+ for(let k=-3;k<=3;k++){const b=50+k*10,y=tsY(b,y0,h).toFixed(1);
+  s+=`<line x1="${TS_X0}" y1="${y}" x2="${TS_X0+TS_W}" y2="${y}" stroke="rgba(255,255,255,${k?.06:.24})"${k?"":' stroke-dasharray="4 4"'}/>`;
+  s+=`<text x="46" y="${(+y+3.5).toFixed(1)}" text-anchor="end" font-size="9.5" fill="#7f8da5">${k>0?"+"+k:k<0?"−"+(-k):"0"} <tspan fill="#4e5c74">${b}%</tspan></text>`;}
+ for(const [b,c] of [[55,"#2dd4a0"],[45,"#ff5c72"]]){const y=tsY(b,y0,h).toFixed(1);
+  s+=`<line x1="${TS_X0}" y1="${y}" x2="${TS_X0+TS_W}" y2="${y}" stroke="${c}" stroke-width=".8" stroke-dasharray="2 3" opacity=".85"/>`;}
+ return s;
+}
+function tsLine(pts,X,y0,h,col,wd){              // pts: [[x-key,b]] ⇒ مقاطع متصلة
+ let s="",cur=[];
+ const flush=()=>{if(cur.length>1)s+=`<polyline points="${cur.join(" ")}" fill="none" stroke="${col}" stroke-width="${wd}" stroke-linejoin="round" stroke-linecap="round"/>`;cur=[];};
+ for(const p of pts){ if(p==null){flush();continue;} cur.push(X(p[0]).toFixed(1)+","+tsY(p[1],y0,h).toFixed(1)); }
+ flush(); return s;
+}
+function tsFast(){                               // بيانات الخادم اللحظية إن كانت صالحة لهذه الأداة
+ const sv=srvAgg(); if(!sv||!sv.fast||!sv.fast.t||!sv.fast.t.length)return null; return sv;
+}
 function tsDraw(){
  const sv=document.getElementById("tsv"); if(!sv)return;
  let o=null;try{o=JSON.parse(localStorage.getItem(TSK));}catch(e){}
- // [v2.2] الخادم أولاً (سلسلة اليوم كاملة) ثم نقاط المتصفح لما ينقصه
+ // الخادم أولاً (سلسلة اليوم كاملة) ثم نقاط المتصفح لما ينقصه
  const mp=new Map();
  for(const p of ((o&&o.p)||[]))mp.set(p[0],p[1]);
  let srvN=0;
- try{const sv=SA.d;
-  if(sv&&sv.series&&sv.underlying===U){for(const p of sv.series){mp.set(p[0],p[1]);srvN++;}}
- }catch(e){}
- const P=[...mp.entries()].sort((a,b)=>a[0]-b[0]), H=96, M=H/2;
- // [v2.5] مدى تلقائي: أكبر انحراف عن 50% في اليوم يملأ المستطيل (بين ±8 و±50)
- let dev=0; for(const p of P)dev=Math.max(dev,Math.abs(p[1]-50));
- const DV=Math.max(8,Math.min(50,dev*1.1));
- const X=mn=>Math.max(0,Math.min(390,mn-570)), Y=b=>M-Math.max(-1,Math.min(1,(b-50)/DV))*(M-4);
- // شبكة: خط 50% + ساعات
- let h=`<defs><clipPath id="cU"><rect x="0" y="0" width="390" height="${Y(50)}"/></clipPath>
-  <clipPath id="cD"><rect x="0" y="${Y(50)}" width="390" height="${H}"/></clipPath></defs>`;
- for(let t=600;t<960;t+=60)h+=`<line x1="${X(t)}" y1="0" x2="${X(t)}" y2="${H}" stroke="rgba(255,255,255,.05)"/>`;
- h+=`<line x1="0" y1="${Y(50)}" x2="390" y2="${Y(50)}" stroke="rgba(255,255,255,.22)" stroke-dasharray="4 4"/>`;
- // تنعيم: متوسط آخر 5 دقائق داخل كل مقطع متصل
- const segs=[];let cur=[];
- for(let i=0;i<P.length;i++){ if(i&&P[i][0]-P[i-1][0]>5){segs.push(cur);cur=[];} cur.push(P[i]); }
- if(cur.length)segs.push(cur);
- let lastPt=null;
- for(const sg of segs){
-  const sm=sg.map((p,i)=>{const w=sg.slice(Math.max(0,i-4),i+1);return [p[0],w.reduce((a,q)=>a+q[1],0)/w.length];});
-  if(sm.length===1){lastPt=sm[0];continue;}
-  const line=sm.map(p=>X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1)).join(" ");
-  const area=`${X(sm[0][0])},${Y(50)} ${line} ${X(sm[sm.length-1][0])},${Y(50)}`;
-  h+=`<polygon points="${area}" fill="rgba(45,212,160,.28)" clip-path="url(#cU)"/>`;
-  h+=`<polygon points="${area}" fill="rgba(255,92,114,.28)" clip-path="url(#cD)"/>`;
-  h+=`<polyline points="${line}" fill="none" stroke="#2dd4a0" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#cU)"/>`;
-  h+=`<polyline points="${line}" fill="none" stroke="#ff5c72" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#cD)"/>`;
-  lastPt=sm[sm.length-1];
+ try{const d=SA.d; if(d&&d.series&&d.underlying===U){for(const p of d.series){mp.set(p[0],p[1]);srvN++;}}}catch(e){}
+ const P=[...mp.entries()].sort((a,b)=>a[0]-b[0]);
+ // ── رسم اليوم ──
+ const y0=8,h=150,X=mn=>TS_X0+(Math.max(570,Math.min(960,mn))-570)/390*TS_W;
+ let g=tsAxis(y0,h);
+ for(const [mn,l] of [[570,"9:30"],[660,"11:00"],[750,"12:30"],[840,"14:00"],[960,"16:00"]])
+  g+=`<text x="${X(mn).toFixed(1)}" y="172" text-anchor="${mn===570?"start":mn===960?"end":"middle"}" font-size="9.5" fill="#4e5c74">${l}</text>`;
+ const seq=[];for(let i=0;i<P.length;i++){if(i&&P[i][0]-P[i-1][0]>5)seq.push(null);seq.push(P[i]);}
+ g+=tsLine(seq,X,y0,h,"#4a90ff",2);
+ const Q=P.filter(p=>p[0]>=575);                // أول 5 د تغطيتها ناقصة ⇒ لا ذروة منها
+ if(Q.length>=5){
+  let hi=Q[0],lo=Q[0];for(const p of Q){if(p[1]>hi[1])hi=p;if(p[1]<lo[1])lo=p;}
+  const lab=(p,up)=>{const x=X(p[0]),y=tsY(p[1],y0,h),c=up?"#2dd4a0":"#ff5c72",
+    hm=String(Math.floor(p[0]/60)).padStart(2,"0")+":"+String(p[0]%60).padStart(2,"0"),
+    tx=(up?"▲ ":"▼ ")+tsLv(p[1]).replace("−","-")+" · "+Math.round(p[1])+"% · "+hm,
+    ty=up?Math.max(11,y-7):Math.min(h+y0-3,y+14), an=x>200?"end":"start";
+   return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${c}"/><text x="${(x+(an==="end"?-5:5)).toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="${an}" font-size="9.5" fill="${c}">${tx}</text>`;};
+  g+=lab(hi,true)+lab(lo,false);
  }
- if(lastPt){
-  const up=lastPt[1]>=50, c=up?"#2dd4a0":"#ff5c72", x=X(lastPt[0]), y=Y(lastPt[1]);
-  h+=`<circle cx="${x}" cy="${y}" r="3.5" fill="${c}" stroke="#0b111b" stroke-width="1.5"/>`;
- }
- sv.innerHTML=h;
+ const lastD=P.length?P[P.length-1]:null;
+ if(lastD)g+=`<circle cx="${X(lastD[0]).toFixed(1)}" cy="${tsY(lastD[1],y0,h).toFixed(1)}" r="4" fill="#4a90ff" stroke="#0b111b" stroke-width="1.5"/>`;
+ if(!P.length)g+=`<text x="${TS_X0+TS_W/2}" y="${y0+h/2}" text-anchor="middle" font-size="11" fill="#7f8da5">يمتلئ مع الجلسة</text>`;
+ sv.innerHTML=g;
  const n=document.getElementById("tsn");
- if(n){
-  if(lastPt){const v=Math.round(lastPt[1]);n.innerHTML=`<b style="color:${v>=50?"var(--up)":"var(--dn)"}">${v>=50?"صعودي "+v:"هبوطي "+(100-v)}%</b> · المقياس ±${Math.round(DV)}% · ${P.length} دقيقة${srvN?" · الخادم":" · المتصفح"}`;}
-  else n.textContent="يمتلئ والصفحة مفتوحة";
+ if(n)n.textContent="مقياس ثابت 20–80% · "+P.length+" دقيقة"+(srvN?" · الخادم":P.length?" · المتصفح":"");
+ // ── اللحظي ──
+ const fv=document.getElementById("tsf"), fn=document.getElementById("tsfn"), F=tsFast();
+ const fy0=6,fh=96;
+ let f=tsAxis(fy0,fh);
+ if(F){
+  const T=F.fast.t, B=F.fast.b, B5=F.fast.b5, tE=T[T.length-1], t0=tE-900;
+  const FX=t=>TS_X0+(Math.max(t0,t)-t0)/900*TS_W;
+  const mk=arr=>{const out=[];for(let i=0;i<T.length;i++){
+    if(i&&T[i]-T[i-1]>20)out.push(null);
+    out.push(arr[i]==null?null:[T[i],arr[i]/10]);}return out;};
+  f+=tsLine(mk(B5),FX,fy0,fh,"#4a90ff",2.2);
+  f+=tsLine(mk(B),FX,fy0,fh,"#ffb547",1.6);
+  let li=-1;for(let i=B.length-1;i>=0;i--)if(B[i]!=null){li=i;break;}
+  if(li>=0)f+=`<circle cx="${FX(T[li]).toFixed(1)}" cy="${tsY(B[li]/10,fy0,fh).toFixed(1)}" r="4" fill="#ffb547" stroke="#0b111b" stroke-width="1.5"/>`;
+  for(const [dt,l] of [[-900,"−15 د"],[-600,"−10"],[-300,"−5"],[0,"الآن"]])
+   f+=`<text x="${FX(tE+dt).toFixed(1)}" y="116" text-anchor="${dt===-900?"start":dt===0?"end":"middle"}" font-size="9.5" fill="#4e5c74">${l}</text>`;
+  if(fn)fn.textContent="نقطة كل "+(F.cad||"—")+" ث"+(F.slow?" · تباطؤ لحماية الحصّة":"");
+ }else{
+  f+=`<text x="${TS_X0+TS_W/2}" y="${fy0+fh/2}" text-anchor="middle" font-size="11" fill="#7f8da5">${U!=="SPX"?"اللحظي من الخادم لـSPX فقط":"بانتظار الخادم…"}</text>`;
+  if(fn)fn.textContent="";
  }
+ if(fv)fv.innerHTML=f;
+ // ── الرأس ──
+ const big=document.getElementById("tsBig"), lv=document.getElementById("tsLvl");
+ let now=null,b5=null;
+ if(F){now=F.fast_now; for(let i=F.fast.b5.length-1;i>=0;i--)if(F.fast.b5[i]!=null){b5=F.fast.b5[i]/10;break;}}
+ if(b5==null&&lastD)b5=lastD[1];
+ const v=now!=null?now:b5;
+ if(big){ if(v==null){big.textContent="—";big.style.color="var(--dim)";}
+  else{big.textContent=tsTxt(v);big.style.color=tsCol(v);} }
+ if(lv)lv.textContent=v==null?"":"المستوى "+tsLv(v)+(now!=null&&b5!=null?" · دقيقة "+Math.round(now)+"% · 5 د "+Math.round(b5)+"%":"");
+ tsAge(); tsErr();
+}
+function tsAge(){
+ const el=document.getElementById("tsAge"); if(!el)return;
+ const F=tsFast();
+ if(!F||F.tick_age==null||!LAST_D||LAST_D.session!=="open"){el.textContent="";return;}
+ const a=F.tick_age+(SA.rtt||0)/2000+(Date.now()-SA.at)/1000;
+ el.textContent="تأخير "+a.toFixed(1)+" ث";
+ el.style.color=a<=5?"var(--up)":a<=10?"var(--wr)":"var(--dn)";
+}
+function tsErr(){
+ const el=document.getElementById("tsErr"); if(!el)return;
+ const now=Date.now(), E=SA.errs.filter(e=>now-e[0]<=600000);
+ if(!E.length){el.textContent="";return;}
+ const c={};for(const e of E)c[e[1]]=(c[e[1]]||0)+1;
+ const last=new Date(E[E.length-1][0]).toLocaleTimeString("en-GB",{timeZone:"America/New_York",hour12:false});
+ el.textContent="انقطاع الخادم: "+E.length+" خلال 10 د ("+Object.entries(c).map(([k,v])=>k+" ×"+v).join(" · ")+") · آخرها "+last+" NY";
 }
 function markNearest(L,sp){
  let up=null,dn=null;
@@ -2686,6 +2790,8 @@ function arm(sec){CUR=sec;}
 function stop(){clearTimeout(TIMER);TIMER=null;}
 function start(){stop();if(CUR==null)CUR=R;tick();}
 function pace(session){arm(session==="open"?R:60);}
-document.addEventListener("visibilitychange",()=>{document.hidden?stop():start();});
-start();
+document.addEventListener("visibilitychange",()=>{
+ if(document.hidden){stop();clearTimeout(AGT);AGT=null;}else{start();agPoll();}});
+start();agPoll();
+setInterval(()=>{if(!document.hidden){try{tsAge();}catch(e){}}},1000);   // [v2.8] عدّاد التأخير
 </script></body></html>"""
