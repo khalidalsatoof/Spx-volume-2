@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.8)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.9)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊼ [v2.9] (5 أكتوبر) — /td.csv: تصدير شموع تاريخية من Twelve Data كملف CSV للتحليل
+     (اختبار تحسينات إشارة TradingView). قراءة فقط · لا يمسّ اللوحة ولا البوت ·
+     يتطلب TWELVEDATA_API_KEY و TD_EXPORT_KEY في Vercel (بدونهما يرجع رسالة واضحة).
+     /td.csv?k=<TD_EXPORT_KEY>&symbol=SPY&interval=5min&start=2026-07-01&end=2026-10-02
+     يقسّم المدى شهراً شهراً (≤ TD_EXPORT_MAX_DAYS = 100 يوم في الطلب الواحد) ·
+     ترتيب تصاعدي · بلا تكرار · توقيت نيويورك · ساعات السوق فقط.
   ㊻ [v2.8] (يتطلب liq v3.3) — المسيطرون لحظياً (طلب خالد 2 أكتوبر)
      ① قراءة /liq_agg من Render كل 2 ث في الجلسة (30 ث خارجها) بحلقة مستقلة: طلب
         واحد في كل مرة، مهلة 5 ث، تتوقف في الخلفية وتعود فوراً. لا تُحسب من نداءات
@@ -1298,7 +1304,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.8",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.9",
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -1363,6 +1369,101 @@ def as_bars(opt: str = "", und: str = "SPX", start: str = ""):
     return JSONResponse(bars(opt, und, start))
 
 
+# ═══ [v2.9] تصدير شموع Twelve Data ═══
+TWELVE_KEY = os.getenv("TWELVEDATA_API_KEY", "").strip()
+TD_EXPORT_KEY = os.getenv("TD_EXPORT_KEY", "").strip()
+TD_EXPORT_MAX_DAYS = int(os.getenv("TD_EXPORT_MAX_DAYS", "100"))
+_TD_SYMS = {"SPY", "QQQ", "IWM", "DIA"}
+_TD_INT = {"1min", "5min", "15min", "30min", "1h"}
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _td_get_chunk(symbol, interval, s, e):
+    """شهر واحد من Twelve Data ⇒ (قائمة [dt,o,h,l,c,v] أو None، خطأ)."""
+    try:
+        r = _http().get("https://api.twelvedata.com/time_series", params={
+            "symbol": symbol, "interval": interval, "start_date": s + " 00:00:00",
+            "end_date": e + " 23:59:59", "outputsize": 5000, "order": "ASC",
+            "timezone": "America/New_York", "apikey": TWELVE_KEY}, timeout=12.0)
+        js = r.json()
+    except Exception as ex:
+        return None, f"{type(ex).__name__}: {str(ex)[:120]}"
+    if not isinstance(js, dict):
+        return None, "رد غير صالح"
+    if js.get("status") == "error":
+        if "No data" in str(js.get("message", "")):
+            return [], None
+        return None, f"{js.get('code')}: {str(js.get('message'))[:160]}"
+    out = []
+    for v in js.get("values") or []:
+        try:
+            out.append([str(v["datetime"])[:19], float(v["open"]), float(v["high"]),
+                        float(v["low"]), float(v["close"]), int(float(v.get("volume") or 0))])
+        except Exception:
+            continue
+    return out, None
+
+
+def td_export(k, symbol, interval, start, end):
+    """يرجع (نص CSV، رمز HTTP، اسم الملف)."""
+    from datetime import date as _date, timedelta as _td
+    if not TWELVE_KEY or not TD_EXPORT_KEY:
+        return ("خطأ: أضف TWELVEDATA_API_KEY و TD_EXPORT_KEY في متغيّرات Vercel ثم أعد النشر",
+                503, None)
+    if k != TD_EXPORT_KEY:
+        return "خطأ: المفتاح k غير صحيح", 403, None
+    symbol = (symbol or "SPY").upper()
+    if symbol not in _TD_SYMS:
+        return f"خطأ: الرمز غير مسموح ({', '.join(sorted(_TD_SYMS))})", 400, None
+    if interval not in _TD_INT:
+        return f"خطأ: الفاصل غير مسموح ({', '.join(sorted(_TD_INT))})", 400, None
+    if not (_DATE_RE.fullmatch(start or "") and _DATE_RE.fullmatch(end or "")):
+        return "خطأ: التاريخ بصيغة YYYY-MM-DD في start و end", 400, None
+    try:
+        d0, d1 = _date.fromisoformat(start), _date.fromisoformat(end)
+    except ValueError:
+        return "خطأ: تاريخ غير صالح", 400, None
+    if d1 < d0:
+        return "خطأ: end قبل start", 400, None
+    if (d1 - d0).days > TD_EXPORT_MAX_DAYS:
+        return (f"خطأ: المدى أطول من {TD_EXPORT_MAX_DAYS} يوماً — قسّمه على أكثر من ملف",
+                400, None)
+    rows, cur = {}, d0
+    while cur <= d1:
+        nxt = (cur.replace(day=28) + _td(days=4)).replace(day=1)   # أول الشهر التالي
+        e = min(d1, nxt - _td(days=1))
+        chunk, err = _td_get_chunk(symbol, interval, cur.isoformat(), e.isoformat())
+        if chunk is None:
+            return f"خطأ من Twelve Data ({cur}…{e}): {err}", 502, None
+        for b in chunk:
+            hm = b[0][11:16]
+            if interval in ("1h",) or "09:30" <= hm <= "15:59":   # ساعات السوق
+                rows[b[0]] = b
+        cur = nxt
+    lines = ["datetime,open,high,low,close,volume"]
+    for t in sorted(rows):
+        b = rows[t]
+        lines.append(f"{b[0]},{b[1]:.4f},{b[2]:.4f},{b[3]:.4f},{b[4]:.4f},{b[5]}")
+    fn = f"{symbol}_{interval}_{start}_{end}.csv"
+    return "\n".join(lines) + "\n", 200, fn
+
+
+def _td_resp(k, symbol, interval, start, end):
+    from fastapi.responses import Response
+    body, code, fn = td_export(k, symbol, interval, start, end)
+    if code != 200:
+        return HTMLResponse(f"<pre dir='rtl' style='font:15px/1.6 sans-serif'>{body}</pre>",
+                            status_code=code)
+    return Response(content=body, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+
+
+@app.get("/td.csv")
+def as_td_csv(k: str = "", symbol: str = "SPY", interval: str = "5min",
+              start: str = "", end: str = ""):
+    return _td_resp(k, symbol, interval, start, end)
+
+
 @app.get("/json")
 def as_json(u: str = "SPY", n: int = 0, exp: str = ""):
     d = fetch(u, expiration=exp or None, n=n or None, force=True)
@@ -1415,8 +1516,11 @@ def dash(u: str = "SPY", n: int = 0, r: int = 8):
 # يلتقط أي مسار غير معروف ويوجّهه بحسب نهايته — يجب أن يبقى الأخير.
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 8,
-              opt: str = "", und: str = "SPX", start: str = ""):
+              opt: str = "", und: str = "SPX", start: str = "",
+              k: str = "", symbol: str = "SPY", interval: str = "5min", end: str = ""):
     p = "/" + (full_path or "").strip("/")
+    if p.endswith("/td.csv"):                                  # [v2.9]
+        return _td_resp(k, symbol, interval, start, end)
     if p.endswith("/bars"):                                   # [v2.3]
         return JSONResponse(bars(opt, und, start))
     if p.endswith("/health"):
