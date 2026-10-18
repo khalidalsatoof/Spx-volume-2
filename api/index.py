@@ -1,8 +1,21 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v2.9)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.0)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊽ [v3.0] (18 أكتوبر · يتطلب liq v3.6 على Render) — محفظة بوت السيولة
+     ① حُذف تبويب SPY من الواجهة (الصفحة SPX دائماً) · VWAP لـSPX باقٍ محسوباً من SPY
+        ومحوّلاً بنسبة السعرين كما كان (/json?u=SPY يبقى يعمل للخادم وللتشخيص).
+     ② القسم العلوي: شارت SPX صغير بأزرار 1 · 5 · 15 دقيقة (من /liq_board · شموع liq).
+     ③ مكان القرارات: بطاقة صفقة البوت المفتوحة بشكل صف محفظة الوسيط (الرمز · القيمة
+        السوقية والكمية · آخر سعر ومتوسط التكلفة · إجمالي الربح $ و%) + التسليح والوقف ·
+        تتحدّث كل 2 ث · بعد 60 دقيقة تنتقل للمحفظة · قائمة القرارات خلف زر «القرارات».
+     ④ تبويب جديد «محفظة بوت السيولة»: محفظة البوت بأزرار G1 · G2 · G3 (اليومي ·
+        الأسبوعي · جدول الصفقات) + تبويب لكل استراتيجية ظلية (صفقتها المفتوحة حيّة +
+        تراكميها بمحفظة $10,000 · 15% · عقد واحد · بقاعدة خروجها المعتمدة).
+     ⑤ /board: وسيط في الخادم يقرأ /liq_board?key= من Render — المفتاح في متغيّر Vercel
+        BOT_ACCESS_KEY (= ACCESS_KEY في Render) ولا يصل للمتصفح أبداً.
+     ⚠ لا تغيير في /json أو /snap أو /bars أو /td.csv أو حساب أي رقم في اللوحة.
   ㊼ [v2.9] (5 أكتوبر) — /td.csv: تصدير شموع تاريخية من Twelve Data كملف CSV للتحليل
      (اختبار تحسينات إشارة TradingView). قراءة فقط · لا يمسّ اللوحة ولا البوت ·
      يتطلب TWELVEDATA_API_KEY و TD_EXPORT_KEY في Vercel (بدونهما يرجع رسالة واضحة).
@@ -1304,7 +1317,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "2.9",
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "3.0", "board_key": bool(BOT_KEY),
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -1370,6 +1383,56 @@ def as_bars(opt: str = "", und: str = "SPX", start: str = ""):
 
 
 # ═══ [v2.9] تصدير شموع Twelve Data ═══
+# ═══ [v3.0] وسيط /board ⇒ Render /liq_board (المفتاح في الخادم فقط) ═══
+BOT_URL = os.getenv("BOT_URL", "https://spx-paper-bot.onrender.com").strip().rstrip("/")
+BOT_KEY = os.getenv("BOT_ACCESS_KEY", "").strip()
+BOARD_CACHE_SEC = float(os.getenv("BOARD_CACHE_SEC", "3"))
+_BOARD_C = {}
+_BOARD_LOCK = threading.Lock()
+_RE_G = re.compile(r"^G\d{1,2}$")
+_RE_S = re.compile(r"^[A-Z]{1,4}$")
+
+
+def board(part="all", g="", s=""):
+    """يقرأ /liq_board من Render بالمفتاح ويعيد الرد كما هو. المعاملات مقيّدة بقائمة
+       بيضاء (لا شيء من المستخدم يدخل الرابط حرفياً) · ذاكرة قصيرة BOARD_CACHE_SEC
+       لكل طلب متطابق (عدة متصفحات ⇒ طلب واحد لـRender)."""
+    part = part if part in ("all", "bars", "cards", "book") else "all"
+    g = g if _RE_G.match(g or "") else ""
+    s = s if _RE_S.match(s or "") else ""
+    if not BOT_KEY:
+        return {"ok": False, "err": "BOT_ACCESS_KEY غير مضبوط في Vercel"}
+    key = (part, g, s)
+    now = datetime.now().timestamp()
+    with _BOARD_LOCK:
+        c = _BOARD_C.get(key)
+        if c and now - c[0] < BOARD_CACHE_SEC:
+            return c[1]
+    try:
+        r = _http().get(BOT_URL + "/liq_board", timeout=8.0,
+                        params={"key": BOT_KEY, "part": part, "g": g, "s": s})
+        if r.status_code == 401:
+            return {"ok": False, "err": "المفتاح مرفوض من Render (BOT_ACCESS_KEY ≠ ACCESS_KEY)"}
+        if r.status_code == 404:
+            return {"ok": False, "err": "Render بلا /liq_board — يتطلب liq v3.6"}
+        if r.status_code != 200:
+            return {"ok": False, "err": f"Render HTTP {r.status_code}"}
+        js = r.json()
+        if not isinstance(js, dict):
+            return {"ok": False, "err": "رد غير متوقع من Render"}
+    except Exception as e:
+        if isinstance(e, getattr(httpx, "TransportError", Exception)):
+            _http_reset()
+        return {"ok": False, "err": f"{type(e).__name__}"[:80]}
+    if js.get("ok"):
+        with _BOARD_LOCK:
+            _BOARD_C[key] = (now, js)
+            if len(_BOARD_C) > 64:                       # سقف ثابت للذاكرة
+                for k in sorted(_BOARD_C, key=lambda k: _BOARD_C[k][0])[:32]:
+                    _BOARD_C.pop(k, None)
+    return js
+
+
 TWELVE_KEY = os.getenv("TWELVEDATA_API_KEY", "").strip()
 TD_EXPORT_KEY = os.getenv("TD_EXPORT_KEY", "").strip()
 TD_EXPORT_MAX_DAYS = int(os.getenv("TD_EXPORT_MAX_DAYS", "100"))
@@ -1464,6 +1527,11 @@ def as_td_csv(k: str = "", symbol: str = "SPY", interval: str = "5min",
     return _td_resp(k, symbol, interval, start, end)
 
 
+@app.get("/board")
+def as_board(part: str = "all", g: str = "", s: str = ""):
+    return JSONResponse(board(part, g, s), headers={"Cache-Control": "no-store"})
+
+
 @app.get("/json")
 def as_json(u: str = "SPY", n: int = 0, exp: str = ""):
     d = fetch(u, expiration=exp or None, n=n or None, force=True)
@@ -1495,8 +1563,8 @@ def snap(u: str = "SPX", n: int = 30, key: str = "", tag: str = "",
 
 
 def _page(u, n, r):
-    u = u.upper() if u.upper() in UNDERLYINGS else "SPY"
-    other = "SPX" if u == "SPY" else "SPY"
+    u = "SPX"                                   # [v3.0] حُذف تبويب SPY — الصفحة SPX دائماً
+    other = "SPY"
     n = max(3, min(n or LIQ_STRIKES, 30))
     r = max(5, min(r or 8, 15))             # [v2.8] /json كل 8 ث افتراضياً (5–15) — المسيطرون كل 2 ث
     picks = "".join(
@@ -1517,8 +1585,11 @@ def dash(u: str = "SPY", n: int = 0, r: int = 8):
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 8,
               opt: str = "", und: str = "SPX", start: str = "",
-              k: str = "", symbol: str = "SPY", interval: str = "5min", end: str = ""):
+              k: str = "", symbol: str = "SPY", interval: str = "5min", end: str = "",
+              part: str = "all", g: str = "", s: str = ""):
     p = "/" + (full_path or "").strip("/")
+    if p.endswith("/board"):                                    # [v3.0]
+        return JSONResponse(board(part, g, s), headers={"Cache-Control": "no-store"})
     if p.endswith("/td.csv"):                                  # [v2.9]
         return _td_resp(k, symbol, interval, start, end)
     if p.endswith("/bars"):                                   # [v2.3]
@@ -1753,6 +1824,62 @@ body{margin:0;background:var(--bg);color:var(--tx);
 .lr.px b{color:#8ab6ff}
 /* ── [v2.0] القرار ── */
 .hide{display:none!important}
+/* ═══ [v3.0] الشارت · بطاقة الصف · محفظة بوت السيولة (بروح /account و/measure) ═══ */
+button.tab{font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.hd{flex-wrap:wrap}.hd .tabs{flex:1 1 100%;order:-1}.hd .tabs .tab{flex:1;text-align:center}
+.chc{background:var(--c1);border:1px solid var(--ln);border-radius:16px;padding:10px 10px 6px;margin-bottom:10px}
+.chh{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim)}
+.chh b{color:var(--tx);font-size:13px}.chh span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chb{display:flex;gap:4px;background:rgba(255,255,255,.06);border-radius:10px;padding:3px}
+.chb button{border:0;background:transparent;color:var(--dim);font:inherit;font-size:12px;font-weight:700;padding:5px 10px;border-radius:8px;cursor:pointer}
+.chb button.on{background:var(--tx);color:var(--bg)}
+#chv{display:block;width:100%;height:150px;direction:ltr;margin-top:6px}
+.chf{display:flex;justify-content:space-between;font-size:10px;color:var(--ft);direction:ltr;padding:0 2px}
+.qbox{margin:8px 0 4px;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.12);background:#f7f9fc;color:#0d1526}
+.qhd,.qrow{display:grid;grid-template-columns:1.25fr 1.1fr .9fr 1fr;gap:6px;padding:8px 10px;align-items:center}
+.qhd{font-size:10.5px;color:#5c6b84;background:#eef2f8;font-weight:600}
+.qhd span{display:flex;flex-direction:column;line-height:1.25}.qhd i{font-style:normal;color:#8a97ac;font-weight:500}
+.qrow .qc{display:flex;flex-direction:column;line-height:1.3;min-width:0}
+.qrow .qc b{font-size:15px;font-weight:700;direction:ltr;text-align:right;white-space:nowrap}
+.qrow .qc s{text-decoration:none;font-size:12px;color:#6b7891;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qrow .q1 b{direction:rtl}
+.qsub{display:flex;flex-wrap:wrap;gap:4px 10px;padding:7px 10px 9px;font-size:11.5px;color:#334158;border-top:1px solid #e3e8f0;background:#fbfcfe}
+.qsub b{font-weight:700;direction:ltr;unicode-bidi:isolate}
+.qtag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700}
+.qempty{font-size:12px;color:var(--dim);padding:6px 2px}
+body.pfon{background-color:#0A1024;background-image:radial-gradient(900px 520px at 85% -5%,rgba(124,58,237,.45),transparent 60%),radial-gradient(800px 600px at 0% 35%,rgba(14,165,233,.28),transparent 60%),radial-gradient(700px 500px at 90% 90%,rgba(16,185,129,.22),transparent 60%)}
+.pfw{display:flex;flex-direction:column;gap:14px}
+.pfc{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:20px;padding:14px}
+.pfhero{background:linear-gradient(140deg,rgba(124,58,237,.55),rgba(14,165,233,.35));border-color:rgba(255,255,255,.18)}
+.pft{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.pft b{font-size:19px}.pft span{font-size:11px;color:#CFE0FF}
+.pfsub{font-size:12px;color:#DCE6FF;margin:4px 0 10px}
+.pfh2{font-size:16px;font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between;align-items:baseline;gap:6px;flex-wrap:wrap}
+.pfmut{font-size:11px;color:#A9BBD6;font-weight:500}
+.seg{display:flex;flex-wrap:wrap;gap:5px;padding:4px;border-radius:13px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}
+.seg button{min-height:38px;padding:0 13px;border:0;border-radius:10px;font:inherit;font-size:14px;font-weight:700;cursor:pointer;background:transparent;color:#DCE6FF}
+.seg button.on{background:#EAF2FF;color:#0A1024}
+.seg.sm button{min-height:34px;padding:0 10px;font-size:12.5px}
+.seg button{flex:1 1 0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15;padding-top:4px;padding-bottom:4px}
+.seg.sm button{flex:1 1 30%}
+.seg button i{font-style:normal;font-size:10px;opacity:.8;font-weight:600}
+.pfk{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+.pfk div{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.11);border-radius:13px;padding:9px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.pfk u{text-decoration:none;font-size:10.5px;color:#A9BBD6}
+.pfk b{font-size:16px;font-weight:700;direction:ltr;text-align:right;white-space:nowrap}
+.pfk s{text-decoration:none;font-size:10.5px;color:#8EA3C2}
+.pfk .big{grid-column:1/-1;background:linear-gradient(140deg,rgba(255,255,255,.10),rgba(255,255,255,.04))}
+.pfk .big b{font-size:26px}
+.pfdw{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+@media (max-width:560px){.pfdw{grid-template-columns:1fr}}
+.pft2{width:100%;border-collapse:collapse;font-size:12px}
+.pft2 th{padding:6px 5px;font-weight:500;color:#A9BBD6;text-align:right;white-space:nowrap;font-size:11px}
+.pft2 td{padding:7px 5px;border-top:1px solid rgba(255,255,255,.08);white-space:nowrap}
+.pft2 td.n{direction:ltr;text-align:right;unicode-bidi:isolate}
+.pfscr{overflow:auto;max-height:430px;border-radius:12px;background:rgba(10,16,36,.35)}
+.pfnote{font-size:11px;color:#A9BBD6;padding:0 4px;line-height:1.6}
+.pferr{font-size:12px;color:#FECACA;background:rgba(248,113,113,.14);border:1px solid rgba(248,113,113,.4);border-radius:10px;padding:8px 10px;margin:8px 0}
+
 .vd{border-radius:12px;padding:12px 10px 10px;margin-bottom:10px;text-align:center;background:rgba(255,255,255,.035);border:1px solid var(--ln)}
 .vw{font-size:30px;font-weight:800;letter-spacing:.5px;line-height:1.1}
 .vr{margin-top:6px;font-size:12px;color:var(--tx);line-height:1.55}
@@ -1812,8 +1939,8 @@ details.adv[open]>summary{color:var(--tx)}
 
 <div class="hd">
  <div class="tabs">
-  <a class="tab on" href="/?u=__U__&n=__N__&r=__R__">__U__</a>
-  <a class="tab" href="/?u=__OTHER__&n=__N__&r=__R__">__OTHER__</a>
+  <button class="tab on" id="tbMain" type="button">SPX</button>
+  <button class="tab" id="tbPf" type="button">محفظة بوت السيولة</button>
  </div>
  <div class="px"><b id="spot">—</b>
   <span class="chg" id="chg"></span>
@@ -1822,6 +1949,13 @@ details.adv[open]>summary{color:var(--tx)}
   <span class="conc" id="conc"></span></div>
 </div>
 
+<div id="vMain">
+<div class="chc" id="chc">
+ <div class="chh"><b>SPX</b><span id="chInfo">جارٍ جلب الشموع…</span>
+  <div class="chb" id="chB"><button type="button" data-iv="1">1د</button><button type="button" data-iv="5">5د</button><button type="button" data-iv="15">15د</button></div></div>
+ <svg id="chv" viewBox="0 0 360 150" preserveAspectRatio="none"></svg>
+ <div class="chf" id="chFoot"></div>
+</div>
 <div class="rng" id="rng" style="display:none">
  <div class="lbl"><span id="rlo">—</span><span id="rmid">نطاق اليوم</span>
   <span id="rhi">—</span></div>
@@ -1833,9 +1967,9 @@ details.adv[open]>summary{color:var(--tx)}
  <div class="nhd"><b>القرار</b><span id="nts"></span></div>
  <div class="vd" id="vd">
   <div class="lbh"><b>بوت السيولة · SPX</b><span class="lbst" id="lbSt">…</span></div>
-  <div class="lbc" id="lbC">جارٍ القراءة…</div>
   <div id="lbNew"></div>
-  <button class="lbbtn" id="lbBtn" type="button">قرارات اليوم ▾</button>
+  <div class="lbc" id="lbC">جارٍ القراءة…</div>
+  <button class="lbbtn" id="lbBtn" type="button">القرارات ▾</button>
   <div class="lblist hide" id="lbList"></div>
   <div class="vg">قياس فقط · لا تنفيذ · غير مختبَر</div>
   <div class="lbcl" id="lbCalls"></div>
@@ -1932,6 +2066,32 @@ details.adv[open]>summary{color:var(--tx)}
 
 <div class="ctitle">أكبر ثمانية تجمّعات — الشريط = الحصة · OI = الرسوخ</div>
 <div class="cl" id="chips"></div>
+</div>
+
+<div id="vPf" class="hide"><div class="pfw">
+ <div class="pfc pfhero">
+  <div class="pft"><b>محفظة بوت السيولة</b><span id="pfSt">جارٍ التحميل…</span></div>
+  <div class="pfsub" id="pfRule">رأس المال $10,000 · 15% للصفقة · عقد واحد · بلا عمولة</div>
+  <div class="seg" id="pfG"></div>
+ </div>
+ <div class="pfc">
+  <div class="pfh2">البوت الفعلي <span id="pfBotRule" class="pfmut"></span></div>
+  <div id="pfBotOpen"></div>
+  <div id="pfBotK"></div>
+  <div id="pfBotDW"></div>
+  <div id="pfBotT"></div>
+ </div>
+ <div class="pfc">
+  <div class="pfh2">الاستراتيجيات الظلية <span class="pfmut">قياس فقط · لا تنفيذ</span></div>
+  <div class="seg sm" id="pfS"></div>
+  <div class="pfmut" id="pfShRule"></div>
+  <div id="pfShOpen"></div>
+  <div id="pfShK"></div>
+  <div id="pfShDW"></div>
+  <div id="pfShT"></div>
+ </div>
+ <div class="pfnote">الربح = منتصف الدخول × 100 × (Bid الخروج ÷ Ask الدخول − 1) × العقود · البوت الفعلي = خروجه الحي · الظلال = قاعدة خروجها المعتمدة محسوبة من مسار العقد · G1/G2 محسوبتان بالقواعد الحالية (الوقف بلمسة).</div>
+</div></div>
 
 <script>
 const U="__U__",N=__N__,R=__R__;
@@ -2368,6 +2528,7 @@ function agPoll(){
   .then(j=>{if(!(j&&j.ok))throw {k:"رد غير صالح"};
    SA.d=j;SA.at=Date.now();SA.fail=0;SA.rtt=Date.now()-t0;
    try{if(LAST_D)lbPaint(LAST_D,LAST_D.session==="open");}catch(e){}
+   try{if(VIEW==="pf")pfLive();}catch(e){console.log("pf",e);}
    try{tsDraw();}catch(e){console.log("ts",e);}})
   .catch(e=>{SA.fail++;
    const k=(e&&e.k)||((e&&e.name==="AbortError")?"مهلة":"شبكة");
@@ -2469,11 +2630,9 @@ function lbPaint(d,live){
  const opn=T.filter(x=>x.state==="open"), done=T.filter(x=>x.state!=="open");
  St.textContent=opn.length?`${opn.length} مفتوحة`:(live?"يراقب":"خارج الجلسة");
  C.innerHTML=live?lbCond(c,r):(T.length?`انتهت الجلسة · ${T.length} صفقة اليوم`:"خارج الجلسة · يعمل 09:45–15:00 NY");
- const nowS=c&&c.t?lbSecs(c.t):null;
- const fresh=T.filter(x=>nowS!=null&&nowS-lbSecs(x.t)<LB_MAIN_MIN*60&&nowS>=lbSecs(x.t)).reverse();
- Nw.innerHTML=fresh.map(x=>lbCard(x,r)).join("");
+ Nw.innerHTML=qBotCards(D,live);                    // [v3.0] صف المحفظة ≤60 د · القرارات خلف الزر
  Bt.style.display="";
- Bt.textContent=`قرارات اليوم (${T.length}${opn.length?` · ${opn.length} مفتوحة`:""}) ${LBOPEN?"▴":"▾"}`;
+ Bt.textContent=`القرارات (${T.length}${opn.length?` · ${opn.length} مفتوحة`:""}) ${LBOPEN?"▴":"▾"}`;
  if(LBOPEN){
   let h="";
   if(opn.length)h+=`<div class="lbsec">المفتوحة</div>`+opn.slice().reverse().map(x=>lbCard(x,r)).join("");
@@ -2882,10 +3041,258 @@ async function load(){
 // تحديث واحد في كل مرة (لا تراكم مهما تأخّر الردّ) · الموعد التالي = 5 ث من بدء
 // السابق (أو فوراً إن تأخّر) · الجلسة مغلقة ⇒ كل 60 ث · الصفحة في الخلفية ⇒ توقف
 // تام (البوت والجامع في الخادم لا يتأثران) ثم تحديث فوري عند العودة.
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   [v3.0] الشارت · بطاقة صف المحفظة · محفظة بوت السيولة
+   البيانات: /liq_agg (البطاقات كل 2 ث) · /board (وسيط Vercel ⇒ Render /liq_board بالمفتاح)
+   ═══════════════════════════════════════════════════════════════════════════ */
+const QG="#4ADE80",QR="#F87171",QM="#8EA3C2";
+function qOk(v){return v!==null&&v!==undefined&&v!==""&&isFinite(Number(v));}
+function qF(v,d){return qOk(v)?Number(v).toFixed(d==null?2:d):"—";}
+function qUsd(v,sign){if(!qOk(v))return "—";v=Number(v);const sg=v<0?"−":(sign&&v>0?"+":"");
+ return `<bdi dir="ltr">${sg}$${Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</bdi>`;}
+function qPc(v,d){if(!qOk(v))return "—";v=Number(v);return `<bdi dir="ltr">${(v<0?"−":(v>0?"+":""))+Math.abs(v).toFixed(d==null?2:d)}%</bdi>`;}
+function qDM(d){d=String(d||"");return d.length>=10?`${+d.slice(8,10)}/${+d.slice(5,7)}`:qEsc(d);}
+function qCol(v){return !qOk(v)?QM:(Number(v)>0?QG:(Number(v)<0?QR:QM));}
+function qEsc(t){return String(t==null?"":t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+const QREASON={SL:"وقف",Trail:"متحرك",TP:"هدف +50%",Time:"انتهاء الوقت",TimeClose:"إغلاق 15:45",
+ SPXbreak:"كسر SPX",Ladder:"السلّم",End:"نهاية النافذة",NoQuote:"بلا سعر",NoClose:"لم تُغلق",NoPrice:"بلا سعر"};
+function qReason(r){r=String(r||"");if(!r)return "—";if(/^SL/.test(r))return "وقف";if(/^Trail/.test(r))return "متحرك";return QREASON[r]||r;}
+const QHEAD=`<div class="qhd"><span>العقد<i>الاستراتيجية · الوقت</i></span><span>القيمة السوقية<i>الكمية</i></span><span>آخر Bid<i>م. التكلفة</i></span><span>إجمالي الربح<i>الربح %</i></span></div>`;
+function qRow(c){
+ const sc=c.side==="CALL"?"#0f9d6b":"#d6334a";
+ const open=c.state==="open";
+ const tag=open?(c.armed?`<span class="qtag" style="background:#dff7ec;color:#0f7a52">مُسلَّحة</span>`:`<span class="qtag" style="background:#e3ecff;color:#2b5fd9">مفتوحة</span>`)
+  :`<span class="qtag" style="background:${qOk(c.pnl_usd)&&c.pnl_usd>=0?"#dff7ec":"#fde4e7"};color:${qOk(c.pnl_usd)&&c.pnl_usd>=0?"#0f7a52":"#b4233a"}">مغلقة · ${qEsc(qReason(c.reason))} ${hm5(c.exit_t)}</span>`;
+ const lc=x=>!qOk(x)?"#6b7891":(x>0?"#0f9d6b":(x<0?"#d6334a":"#6b7891"));
+ const sub=[];
+ if(c.rule==="live"){
+  sub.push(c.armed?`التسليح ✓ عند <b>$${qF(c.arm_px)}</b>`:`التسليح عند <b>$${qF(c.arm_px)}</b> (+30%)`);
+  sub.push(`الوقف الآن <b>$${qF(c.stop_px)}</b> ${c.stop_kind==="Trail"?"(متحرك −25% من الذروة)":"(−40%)"}`);
+ }else{
+  sub.push(`الخروج: ${qEsc(c.rule_ar)}`);
+  if(qOk(c.stop_px))sub.push(`الوقف الآن <b>$${qF(c.stop_px)}</b>${c.armed&&qOk(c.giveback_pct)?` (−${qF(c.giveback_pct,0)}% من الذروة)`:""}`);
+  if(qOk(c.arm_px))sub.push(c.armed?"مُسلَّحة ✓":`التسليح <b>$${qF(c.arm_px)}</b>`);
+  if(qOk(c.tp_px))sub.push(`الهدف <b>$${qF(c.tp_px)}</b>`);
+  if(qOk(c.spx_stop))sub.push(`كسر SPX عند <b>${qF(c.spx_stop,1)}</b>`);
+ }
+ sub.push(`الذروة <b>$${qF(c.peak)}</b> (${qPc(c.peak_pct,0)})`);
+ if(open)sub.push(`المتبقي <b>${qF(c.left_min,0)} د</b> من ${c.rule==="tp50"?30:60}`);
+ if(c.skip)sub.push(`<span style="color:#b4233a">رأس المال لا يكفي ⇒ تُتخطّى في المحفظة</span>`);
+ return `<div class="qrow"><div class="qc q1"><b>${qF(c.k,0)} <span style="color:${sc}">${c.side}</span></b><s>${qEsc(c.src==="BOT"?"البوت":(c.src==="A"?"نسخة البوت":c.name))} · ${hm5(c.t)} NY</s></div>`
+  +`<div class="qc"><b>${qUsd(c.mkt)}</b><s>${c.qty} عقد</s></div>`
+  +`<div class="qc"><b>${qF(c.bid)}</b><s>${qF(c.c0)}</s></div>`
+  +`<div class="qc"><b style="color:${lc(c.pnl_usd)}">${qUsd(c.pnl_usd,1)}</b><s style="color:${lc(c.pnl_pct)}">${qPc(c.pnl_pct)}</s></div></div>`
+  +`<div class="qsub">${tag}${sub.map(x=>`<span>${x}</span>`).join("")}</div>`;
+}
+function qBox(cards){return cards.length?`<div class="qbox">${QHEAD}${cards.map(qRow).join("")}</div>`:"";}
+function qBotCards(D,live){
+ const cs=(D&&D.lb_cards||[]).filter(c=>qOk(c.elapsed_min)&&c.elapsed_min<60);  // بعد 60 د ⇒ المحفظة
+ if(cs.length)return qBox(cs);
+ return live?`<div class="qempty">لا صفقة للبوت خلال آخر 60 دقيقة</div>`:"";
+}
+
+/* ── الشارت ── */
+const CHK="liq_ch_iv";
+const CH={iv:1,d:null,at:0,busy:false,fail:0,err:null,t:null};
+try{const v=+localStorage.getItem(CHK);if(v===1||v===5||v===15)CH.iv=v;}catch(e){}
+function chStop(){clearTimeout(CH.t);CH.t=null;}
+function chPoll(){
+ chStop(); if(document.hidden||VIEW!=="main")return;
+ if(CH.busy){CH.t=setTimeout(chPoll,1000);return;}
+ CH.busy=true;
+ const c=new AbortController(),to=setTimeout(()=>c.abort(),9000);
+ fetch("/board?part=bars",{signal:c.signal,cache:"no-store"})
+  .then(r=>{if(!r.ok)throw {k:"HTTP "+r.status};return r.json();})
+  .then(j=>{if(!(j&&j.ok&&j.bars))throw {k:(j&&j.err)||"رد غير صالح"};CH.d=j.bars;CH.at=Date.now();CH.fail=0;CH.err=null;})
+  .catch(e=>{CH.fail++;CH.err=(e&&e.k)||((e&&e.name==="AbortError")?"مهلة":"شبكة");})
+  .finally(()=>{clearTimeout(to);CH.busy=false;try{chDraw();}catch(e){console.log("chart",e);}
+   if(document.hidden||VIEW!=="main")return;
+   const live=!LAST_D||LAST_D.session==="open";
+   CH.t=setTimeout(chPoll,live?10000:60000);});
+}
+function chDraw(){
+ const sv=document.getElementById("chv"),inf=document.getElementById("chInfo"),ft=document.getElementById("chFoot");
+ if(!sv)return;
+ document.querySelectorAll("#chB button").forEach(b=>b.classList.toggle("on",+b.dataset.iv===CH.iv));
+ const all=(CH.d&&CH.d["m"+CH.iv])||[];
+ const cap=CH.iv===1?90:(CH.iv===5?78:26);
+ const B=all.filter(b=>b&&b.length>=5&&[1,2,3,4].every(i=>qOk(b[i]))).slice(-cap);
+ if(!B.length){sv.innerHTML="";ft.innerHTML="";
+  inf.textContent=CH.err?`تعذّر جلب الشموع: ${CH.err}`:(CH.d?"لا شموع بعد (تبدأ 09:30 NY)":"جارٍ جلب الشموع…");return;}
+ let hi=-Infinity,lo=Infinity;for(const b of B){hi=Math.max(hi,b[2]);lo=Math.min(lo,b[3]);}
+ const vw=LAST_D&&LAST_D.vwap&&qOk(LAST_D.vwap.vwap_und)?Number(LAST_D.vwap.vwap_und):null;
+ if(vw!=null&&vw<hi+(hi-lo)&&vw>lo-(hi-lo)){hi=Math.max(hi,vw);lo=Math.min(lo,vw);}
+ if(hi-lo<1){hi+=0.5;lo-=0.5;}
+ const W=360,H=150,PT=11,PB=8,PR=42,cw=(W-PR)/B.length;
+ const y=v=>PT+(hi-v)/(hi-lo)*(H-PT-PB);
+ let g="";
+ for(let k=0;k<=3;k++){const v=lo+(hi-lo)*k/3,yy=y(v);
+  g+=`<line x1="0" x2="${W-PR}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="#212b3c" stroke-width="1"/>`
+   +`<text x="${W-PR+3}" y="${(yy+3).toFixed(1)}" font-size="9" fill="#7f8da5">${v.toFixed(0)}</text>`;}
+ if(vw!=null){const yy=y(vw);g+=`<line x1="0" x2="${W-PR}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="#4a90ff" stroke-width="1" stroke-dasharray="4 3"/>`
+  +`<text x="2" y="${(yy-3).toFixed(1)}" font-size="9" fill="#4a90ff">VWAP ${vw.toFixed(1)}</text>`;}
+ B.forEach((b,i)=>{const [t,o,h,l,c,lv]=b,x=i*cw+cw/2,up=c>=o,col=up?"#2dd4a0":"#ff5c72";
+  const bw=Math.max(1,cw*0.66),yt=y(Math.max(o,c)),yb=y(Math.min(o,c));
+  g+=`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${y(h).toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"${lv?' opacity=".6"':''}/>`
+   +`<rect class="cnd" x="${(x-bw/2).toFixed(1)}" y="${yt.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,yb-yt).toFixed(1)}" fill="${col}"${lv?' opacity=".6"':''}/>`;});
+ const lc=B[B.length-1][4],yl=y(lc);
+ g+=`<line x1="0" x2="${W-PR}" y1="${yl.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="#e9eef6" stroke-width=".6" stroke-dasharray="2 3" opacity=".6"/>`
+  +`<rect x="${W-PR+1}" y="${(yl-7).toFixed(1)}" width="${PR-2}" height="13" rx="3" fill="#e9eef6"/><text x="${W-PR+3}" y="${(yl+3).toFixed(1)}" font-size="9.5" font-weight="700" fill="#0a0d13">${lc.toFixed(1)}</text>`;
+ sv.innerHTML=g;
+ const age=CH.at?Math.round((Date.now()-CH.at)/1000):null;
+ inf.textContent=`${CH.iv} د · ${B.length} شمعة · أعلى ${hi.toFixed(1)} · أدنى ${lo.toFixed(1)}${CH.err?` · ⚠ ${CH.err}`:(age!=null&&age>30?` · عمرها ${age} ث`:"")}`;
+ ft.innerHTML=`<span>${B[0][0]}</span><span>${B[Math.floor(B.length/2)][0]}</span><span>${B[B.length-1][0]} NY</span>`;
+}
+document.addEventListener("click",e=>{const b=e.target&&e.target.closest&&e.target.closest("#chB button");
+ if(!b)return;CH.iv=+b.dataset.iv;try{localStorage.setItem(CHK,String(CH.iv));}catch(x){}chDraw();});
+
+/* ── العرض: SPX أو المحفظة ── */
+const VK="liq_view";
+let VIEW="main";try{if(localStorage.getItem(VK)==="pf"||location.hash==="#pf")VIEW="pf";}catch(e){}
+function setView(v){
+ VIEW=v==="pf"?"pf":"main";
+ try{localStorage.setItem(VK,VIEW);}catch(e){}
+ document.getElementById("vMain").classList.toggle("hide",VIEW!=="main");
+ document.getElementById("vPf").classList.toggle("hide",VIEW!=="pf");
+ document.getElementById("tbMain").classList.toggle("on",VIEW==="main");
+ document.getElementById("tbPf").classList.toggle("on",VIEW==="pf");
+ document.body.classList.toggle("pfon",VIEW==="pf");
+ viewPolls();
+}
+function viewPolls(){
+ if(document.hidden)return;
+ if(VIEW==="main"){pfStop();chPoll();}
+ else{chStop();pfPoll();try{pfLive();}catch(e){}}
+}
+document.addEventListener("click",e=>{const id=e.target&&e.target.id;
+ if(id==="tbMain")setView("main");else if(id==="tbPf")setView("pf");});
+
+/* ── المحفظة ── */
+const PFK="liq_pf_sel";
+const PF={g:null,s:null,bot:null,sh:null,at:0,busy:false,err:null,t:null,sum:null,meta:null};
+try{const o=JSON.parse(localStorage.getItem(PFK)||"{}");PF.g=o.g||null;PF.s=o.s||null;}catch(e){}
+const SH_ORDER=["A","T","M","E","R","F","G","RND","W"];
+function pfStop(){clearTimeout(PF.t);PF.t=null;}
+function pfSave(){try{localStorage.setItem(PFK,JSON.stringify({g:PF.g,s:PF.s}));}catch(e){}}
+function pfGet(g,s){
+ const c=new AbortController(),to=setTimeout(()=>c.abort(),12000);
+ return fetch(`/board?part=book&g=${encodeURIComponent(g)}&s=${encodeURIComponent(s)}`,{signal:c.signal,cache:"no-store"})
+  .then(r=>{if(!r.ok)throw {k:"HTTP "+r.status};return r.json();})
+  .then(j=>{if(!(j&&j.ok&&j.book))throw {k:(j&&j.err)||"رد غير صالح"};return j.book;})
+  .finally(()=>clearTimeout(to));
+}
+function pfPoll(){
+ pfStop(); if(document.hidden||VIEW!=="pf")return;
+ if(PF.busy){PF.t=setTimeout(pfPoll,1000);return;}
+ PF.busy=true;
+ const g0=PF.g||"G3", s0=PF.s||"T";
+ pfGet(g0,"BOT").then(b=>{
+   PF.meta=b;PF.sum=b.summary||null;
+   const gs=(b.groups||[]).map(x=>x[0]);
+   if(!PF.g||gs.indexOf(PF.g)<0)PF.g=(b.group_now&&gs.indexOf(b.group_now)>=0)?b.group_now:(gs[gs.length-1]||"G3");
+   PF.bot=(PF.g===g0)?(b.trades||[]):null;
+   const srcs=pfStrats();
+   if(!PF.s||srcs.indexOf(PF.s)<0)PF.s=srcs[0]||null;
+   pfSave();
+   const jobs=[];
+   if(PF.bot===null)jobs.push(pfGet(PF.g,"BOT").then(x=>{PF.bot=x.trades||[];}));
+   if(PF.s)jobs.push(pfGet(PF.g,PF.s).then(x=>{PF.sh={g:PF.g,s:PF.s,rows:x.trades||[]};}));
+   return Promise.all(jobs);})
+  .then(()=>{PF.at=Date.now();PF.err=null;})
+  .catch(e=>{PF.err=(e&&e.k)||((e&&e.name==="AbortError")?"مهلة":"شبكة");})
+  .finally(()=>{PF.busy=false;try{pfPaint();}catch(e){console.log("pf",e);}
+   if(document.hidden||VIEW!=="pf")return;
+   PF.t=setTimeout(pfPoll,(!LAST_D||LAST_D.session==="open")?20000:120000);});
+}
+function pfStrats(){
+ const g=PF.sum&&PF.sum[PF.g]; if(!g)return [];
+ const ks=Object.keys(g).filter(k=>k!=="BOT"&&k[0]!=="_");
+ return ks.sort((a,b)=>(SH_ORDER.indexOf(a)+99*(SH_ORDER.indexOf(a)<0))-(SH_ORDER.indexOf(b)+99*(SH_ORDER.indexOf(b)<0)));
+}
+function pfKpi(k){
+ if(!k)return `<div class="qempty">لا صفقات في هذه المجموعة</div>`;
+ const it=(u,b,c,sub)=>`<div><u>${u}</u><b style="color:${c||"#EAF2FF"}">${b}</b>${sub?`<s>${sub}</s>`:""}</div>`;
+ return `<div class="pfk"><div class="big"><u>الرصيد</u><b style="color:${qCol(k.pnl)}">${qUsd(k.eq)}</b><s>${qUsd(k.pnl,1)} · ${qPc(k.ret_pct)} من ${qUsd(PF.meta&&PF.meta.cfg?PF.meta.cfg.start:10000)}</s></div>`
+  +it("الصفقات",`${k.taken}`,null,`من ${k.n} إشارة${k.open?` · ${k.open} مفتوحة`:""}`)
+  +it("الرابحة",qOk(k.win_pct)?`${k.win_pct}%`:"—",null,`${k.wins} من ${k.closed}`)
+  +it("متوسط الصفقة",qPc(k.avg_pct,1),qCol(k.avg_pct),`بحذف الأفضل ${qPc(k.avg_ex_best,1)}`)
+  +it("أفضل / أسوأ",`${qPc(k.best_pct,0)}`,QG,`أسوأ ${qPc(k.worst_pct,0)}`)
+  +it("أقصى تراجع",qOk(k.max_dd_pct)?`−${qF(k.max_dd_pct,1)}%`:"—",k.max_dd_pct>0?QR:null,"من قمة الرصيد")
+  +it("متخطّاة / بلا سعر",`${k.skip_cap} / ${k.unpriced}`,null,`${k.amb?`غامضة ${k.amb} · `:""}${k.nofeat?`بلا ميزات ${k.nofeat}`:"لرأس المال / للبيانات"}`)
+  +`</div>`;
+}
+function pfDW(k){
+ if(!k)return "";
+ const tb=(title,rows,lab)=>`<div class="pfscr" style="max-height:220px"><table class="pft2"><tr><th>${title}</th><th>صفقات</th><th>الربح</th></tr>`
+  +(rows.length?rows.slice().reverse().map(r=>`<tr><td>${lab(r[0])}</td><td>${r[2]}</td><td class="n" style="color:${qCol(r[1])}">${qUsd(r[1],1)}</td></tr>`).join("")
+   :`<tr><td colspan="3" style="color:#8EA3C2">—</td></tr>`)+`</table></div>`;
+ return `<div class="pfdw">${tb("اليوم",k.daily||[],d=>qDM(d))}${tb("الأسبوع",k.weekly||[],d=>"من "+qDM(d))}</div>`;
+}
+function pfTable(rows){
+ if(!rows)return `<div class="qempty">جارٍ جلب الصفقات…</div>`;
+ if(!rows.length)return `<div class="qempty">لا صفقات</div>`;
+ const R=rows.slice().reverse();
+ return `<div class="pfscr"><table class="pft2"><tr><th>اليوم</th><th>الدخول</th><th>العقد</th><th>دخول $</th><th>الخروج</th><th>النتيجة</th><th>عقود</th><th>الربح</th><th>الرصيد</th></tr>`
+  +R.map(r=>{const sc=r.side==="CALL"?"var(--up)":"var(--dn)";
+   const res=r.open?`<span style="color:#8ab6ff">مفتوحة</span>`:(r.skip?`<span style="color:#FBBF24">تُخطّيت</span>`:(qOk(r.pct)?`<span style="color:${qCol(r.pct)}">${qPc(r.pct,1)}</span>`:"—"));
+   return `<tr><td>${qDM(r.d)}</td><td class="n">${hm5(r.t)}</td><td>${qF(r.k,0)} <span style="color:${sc}">${r.side||""}</span></td>`
+    +`<td class="n">${qF(r.c0)}</td><td>${r.open?"—":`${hm5(r.x_t)} ${qEsc(qReason(r.reason))}`}${r.amb?" ⚠":""}</td><td class="n">${res}</td>`
+    +`<td>${r.qty||0}</td><td class="n" style="color:${qCol(r.pnl)}">${qOk(r.pnl)?qUsd(r.pnl,1):"—"}</td><td class="n">${qOk(r.eq)?qUsd(r.eq):"—"}</td></tr>`;}).join("")
+  +`</table></div>`;
+}
+function pfLive(){
+ const D=lbData();
+ const bo=document.getElementById("pfBotOpen"),so=document.getElementById("pfShOpen");
+ if(!bo)return;
+ if(!D){bo.innerHTML="";so.innerHTML="";return;}
+ const bc=(D.lb_cards||[]).filter(c=>c.state==="open");
+ bo.innerHTML=bc.length?qBox(bc):"";
+ const sc=(D.sh_cards||[]).filter(c=>c.src===PF.s);
+ so.innerHTML=sc.length?qBox(sc):`<div class="qempty">لا صفقة مفتوحة لهذه الاستراتيجية الآن</div>`;
+}
+function pfPaint(){
+ const st=document.getElementById("pfSt");
+ const age=PF.at?Math.round((Date.now()-PF.at)/1000):null;
+ st.innerHTML=PF.err?`<span style="color:#FECACA">⚠ ${qEsc(PF.err)}${PF.sum?" · آخر بيانات ناجحة معروضة":""}</span>`
+  :(PF.meta&&PF.meta.busy&&!PF.meta.ready?"الخادم يحسب الدفاتر…":(age!=null?`حُدّث منذ ${age} ث`:"جارٍ التحميل…"));
+ const cfg=PF.meta&&PF.meta.cfg;
+ if(cfg)document.getElementById("pfRule").textContent=`رأس المال $${Number(cfg.start).toLocaleString("en-US")} · ${Math.round(cfg.risk*100)}% للصفقة · ${cfg.qty>0?`حتى ${cfg.qty} عقد`:"بلا سقف للعقود"} · ${cfg.fee>0?`عمولة $${cfg.fee} للجهة`:"بلا عمولة"}`;
+ const groups=(PF.meta&&PF.meta.groups)||[];
+ document.getElementById("pfG").innerHTML=groups.map(x=>`<button type="button" data-g="${qEsc(x[0])}" class="${x[0]===PF.g?"on":""}">${qEsc(x[0])}<i>${x[2]?`<bdi dir="ltr">${qDM(x[1])} – ${qDM(x[2])}</bdi>`:`من <bdi dir="ltr">${qDM(x[1])}</bdi>`}</i></button>`).join("");
+ const g=PF.sum&&PF.sum[PF.g];
+ if(!g){document.getElementById("pfBotK").innerHTML=PF.meta&&!PF.meta.ready?`<div class="qempty">الخادم يحسب الدفاتر لأول مرة (ثوانٍ)…</div>`:(PF.err?`<div class="pferr">تعذّر جلب المحفظة: ${qEsc(PF.err)}</div>`:`<div class="qempty">جارٍ التحميل…</div>`);
+  document.getElementById("pfBotDW").innerHTML="";document.getElementById("pfBotT").innerHTML="";}
+ else{
+  const kb=g.BOT;
+  document.getElementById("pfBotRule").textContent="خروجه الحي: وقف −40% بلمسة · تسليح +30% · متحرك −25% بقراءتين · 15:45";
+  document.getElementById("pfBotK").innerHTML=pfKpi(kb);
+  document.getElementById("pfBotDW").innerHTML=pfDW(kb);
+  document.getElementById("pfBotT").innerHTML=pfTable(PF.bot);
+ }
+ const ss=pfStrats(),names=(PF.meta&&PF.meta.names)||{};
+ document.getElementById("pfS").innerHTML=ss.length?ss.map(k=>{const v=g[k];
+   return `<button type="button" data-s="${qEsc(k)}" class="${k===PF.s?"on":""}">${qEsc(k==="A"?"نسخة البوت (ظل)":(names[k]||k))}<i style="color:${qCol(v&&v.pnl)}">${qOk(v&&v.ret_pct)?qPc(v.ret_pct,1):""}</i></button>`;}).join("")
+  :`<span class="qempty">لا ظلال في هذه المجموعة</span>`;
+ const ks=g&&PF.s?g[PF.s]:null;
+ document.getElementById("pfShRule").textContent=ks?`الخروج المعتمد: ${ks.rule_ar||ks.rule}`:"";
+ document.getElementById("pfShK").innerHTML=ks?pfKpi(ks):"";
+ document.getElementById("pfShDW").innerHTML=ks?pfDW(ks):"";
+ document.getElementById("pfShT").innerHTML=ks?pfTable(PF.sh&&PF.sh.g===PF.g&&PF.sh.s===PF.s?PF.sh.rows:null):"";
+ pfLive();
+}
+document.addEventListener("click",e=>{
+ const b=e.target&&e.target.closest&&e.target.closest("#pfG button,#pfS button"); if(!b)return;
+ if(b.dataset.g){if(PF.g===b.dataset.g)return;PF.g=b.dataset.g;PF.bot=null;PF.sh=null;}
+ if(b.dataset.s){if(PF.s===b.dataset.s)return;PF.s=b.dataset.s;PF.sh=null;}
+ pfSave();try{pfPaint();}catch(x){}pfPoll();});
+
 let TIMER=null,CUR=null,INFL=false;
+let LAST_LOAD=0;
 async function tick(){
  if(INFL)return; INFL=true; const t0=Date.now();
- try{ await load(); }catch(e){ console.log("tick",e); }
+ try{ if(VIEW!=="pf"||Date.now()-LAST_LOAD>=30000){LAST_LOAD=Date.now();await load();} }   // [v3.0] المحفظة ⇒ /json كل 30 ث
+ catch(e){ console.log("tick",e); }
  finally{ INFL=false; }
  if(document.hidden||CUR==null)return;
  clearTimeout(TIMER); TIMER=setTimeout(tick,Math.max(200,CUR*1000-(Date.now()-t0)));
@@ -2895,7 +3302,8 @@ function stop(){clearTimeout(TIMER);TIMER=null;}
 function start(){stop();if(CUR==null)CUR=R;tick();}
 function pace(session){arm(session==="open"?R:60);}
 document.addEventListener("visibilitychange",()=>{
- if(document.hidden){stop();clearTimeout(AGT);AGT=null;}else{start();agPoll();}});
-start();agPoll();
+ if(document.hidden){stop();clearTimeout(AGT);AGT=null;chStop();pfStop();}
+ else{start();agPoll();viewPolls();}});
+start();agPoll();setView(VIEW);
 setInterval(()=>{if(!document.hidden){try{tsAge();}catch(e){}}},1000);   // [v2.8] عدّاد التأخير
 </script></body></html>"""
