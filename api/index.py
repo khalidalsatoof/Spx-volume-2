@@ -1,8 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.0)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.1)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊾ [v3.1] (19 أكتوبر · طلب خالد) — شارت بمزايا TradingView الأساسية
+     ① EMA 9 و EMA 20 (تعريف TradingView: البذرة متوسط أول N ثم k=2/(N+1)) على كل الشموع
+        بما فيها الجلسة السابقة ⇒ قيم صحيحة منذ أول شمعة اليوم.
+     ② منحنى VWAP: VWAP لـSPY دقيقة بدقيقة (سببي، نفس قاعدة الحساب وتقييد الأحجام)
+        × نسبة SPX/SPY الحالية ⇒ آخر نقطة = رقم VWAP المعروض في اللوحة حرفياً.
+     ③ تكبير وتصغير بالقرصة أو العجلة أو الأزرار · سحب للتمرير للخلف · نقرة ⇒ خط تقاطع
+        بالقيم (افتتاح · أعلى · أدنى · إغلاق · EMA · VWAP) · زر ⤢ لشارت أكبر · تُحفظ الإعدادات.
+     ④ الجلسة السابقة (1/5/15 د) من Tradier: 3 نداءات لكل نسخة خادم في اليوم ⇒ الشارت
+        لا يكون فارغاً قبل الافتتاح أو بعد إعادة تشغيل Render.
+     ⑤ بطاقة صف المحفظة صارت داكنة شفافة متناسقة مع اللوحة.
   ㊽ [v3.0] (18 أكتوبر · يتطلب liq v3.6 على Render) — محفظة بوت السيولة
      ① حُذف تبويب SPY من الواجهة (الصفحة SPX دائماً) · VWAP لـSPX باقٍ محسوباً من SPY
         ومحوّلاً بنسبة السعرين كما كان (/json?u=SPY يبقى يعمل للخادم وللتشخيص).
@@ -338,7 +348,8 @@ import math
 import os
 import re                                     # [v2.3] /bars
 import threading
-from datetime import datetime
+import bisect                                 # [v3.1] منحنى VWAP
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -386,7 +397,7 @@ VWAP_GATE_SPY = float(os.getenv("VWAP_GATE_SPY", "0.40"))
 # تقييد حجم الشمعة الشاذة: أضعاف وسيط أحجام شموع اليوم
 VWAP_CAP_MULT = float(os.getenv("VWAP_CAP_MULT", "5"))
 VWAP_CACHE_SEC = 30.0
-_VWAP = {"ts": 0.0, "day": None, "val": None}
+_VWAP = {"ts": 0.0, "day": None, "val": None, "series": []}
 _CLOCK = {"ts": 0.0, "val": None}
 CLOCK_CACHE_SEC = 60.0
 # ساعات جلسة كاملة × أيام تداول السنة — مقام VIX1D
@@ -671,7 +682,87 @@ def _spy_vwap():
     bars = _listify(js.get("series"), "data")
     vw, nb, nc = _vwap_calc(bars)
     val = {"vwap": round(vw, 3), "bars": nb, "capped": nc} if vw else None
-    _VWAP["ts"], _VWAP["day"], _VWAP["val"] = now, day, val
+    try:
+        ser = _vwap_series(bars)                             # [v3.1] للشارت فقط
+    except Exception as e:
+        print("vwap series err:", e)
+        ser = []
+    _VWAP["ts"], _VWAP["day"], _VWAP["val"], _VWAP["series"] = now, day, val, ser
+    return val
+
+
+def _vwap_series(bars, cap_mult=None):
+    """[v3.1] منحنى VWAP لـSPY دقيقة بدقيقة — سببي: قيمة كل دقيقة = _vwap_calc على الشموع
+       حتى تلك الدقيقة (وسيط الأحجام حتى لحظتها). آخر نقطة = القيمة المعروضة حرفياً.
+       يرجع [[HH:MM، VWAP، إغلاق SPY]]."""
+    cap_mult = VWAP_CAP_MULT if cap_mult is None else cap_mult
+    rows, vs, out = [], [], []
+    for b in bars or []:
+        if not isinstance(b, dict):
+            continue
+        v = _f(b.get("volume"))
+        h, l, c = _f(b.get("high")), _f(b.get("low")), _f(b.get("close"))
+        if v <= 0 or h <= 0 or l <= 0 or c <= 0:
+            continue
+        rows.append(((h + l + c) / 3.0, v))
+        bisect.insort(vs, v)
+        m = len(vs)
+        med = vs[m // 2] if m % 2 else (vs[m // 2 - 1] + vs[m // 2]) / 2.0
+        cap = cap_mult * med if med > 0 else float("inf")
+        num = den = 0.0
+        for tp, vv in rows:
+            if vv > cap:
+                vv = cap
+            num += tp * vv
+            den += vv
+        if den > 0:
+            out.append([str(b.get("time") or "")[11:16], round(num / den, 4), round(c, 4)])
+    return out
+
+
+# ═══ [v3.1] الجلسة السابقة للشارت — قبل الافتتاح وللإحماء الصحيح لـEMA ═══
+#  3 نداءات Tradier لكل نسخة خادم في اليوم (1/5/15 د) · تُحفظ لليوم كله.
+_PREV = {"day": None, "t": 0.0, "val": None, "err": None}
+_PREV_LOCK = threading.Lock()
+
+
+def _prev_bars():
+    ny = datetime.now(NY)
+    today = ny.strftime("%Y-%m-%d")
+    now = ny.timestamp()
+    with _PREV_LOCK:
+        if _PREV["day"] == today and _PREV["val"] is not None:
+            return _PREV["val"]
+        if now - _PREV["t"] < 60.0:                           # إعادة المحاولة كل دقيقة على الأكثر
+            return _PREV["val"]
+        _PREV["t"] = now
+    start = (ny - timedelta(days=7)).strftime("%Y-%m-%d") + " 09:30"
+    out, pday = {}, None
+    for iv, key in (("1min", "m1"), ("5min", "m5"), ("15min", "m15")):
+        js, err = _get("/markets/timesales", {"symbol": "SPX", "interval": iv, "start": start,
+                                              "end": f"{today} 09:29", "session_filter": "open"})
+        if err or not isinstance(js, dict):
+            _PREV["err"] = str(err or "رد غير متوقع")[:120]
+            return _PREV["val"]
+        byd = {}
+        for b in _listify(js.get("series"), "data"):
+            if not isinstance(b, dict):
+                continue
+            t = str(b.get("time") or "")
+            d, hm = t[:10], t[11:16]
+            o, h, l, c = (_f(b.get(k)) for k in ("open", "high", "low", "close"))
+            if len(d) != 10 or d >= today or not hm or min(o, h, l, c) <= 0:
+                continue
+            byd.setdefault(d, []).append([hm, round(o, 2), round(h, 2), round(l, 2), round(c, 2), 0])
+        if not byd:
+            _PREV["err"] = "لا جلسة سابقة في الرد"
+            return _PREV["val"]
+        d = max(byd)
+        pday = pday or d
+        out[key] = byd.get(pday, [])
+    val = {"day": pday, **out}
+    with _PREV_LOCK:
+        _PREV.update({"day": today, "val": val, "err": None})
     return val
 
 
@@ -1317,7 +1408,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "3.0", "board_key": bool(BOT_KEY),
+    return {"ok": True, "token": bool(TD_TOKEN), "version": "3.1", "board_key": bool(BOT_KEY),
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -1424,6 +1515,21 @@ def board(part="all", g="", s=""):
         if isinstance(e, getattr(httpx, "TransportError", Exception)):
             _http_reset()
         return {"ok": False, "err": f"{type(e).__name__}"[:80]}
+    if js.get("ok") and isinstance(js.get("bars"), dict):     # [v3.1] الجلسة السابقة + منحنى VWAP
+        try:
+            js["bars"]["prev"] = _prev_bars()
+        except Exception as e:
+            js["bars"]["prev"] = None
+            print("prev bars err:", e)
+        try:
+            _spy_vwap()                                          # مخزّن 30 ث (نفس نداء /json)
+            today = datetime.now(NY).strftime("%Y-%m-%d")
+            ok = _VWAP["day"] == today and _VWAP["val"]
+            js["bars"]["vwap"] = {"series": _VWAP["series"] if ok else [],
+                                  "src": "SPY ⇒ SPX بنسبة السعرين"}
+        except Exception as e:
+            js["bars"]["vwap"] = {"series": []}
+            print("vwap attach err:", e)
     if js.get("ok"):
         with _BOARD_LOCK:
             _BOARD_C[key] = (now, js)
@@ -1833,18 +1939,30 @@ button.tab{font:inherit;font-size:14px;font-weight:600;cursor:pointer}
 .chb{display:flex;gap:4px;background:rgba(255,255,255,.06);border-radius:10px;padding:3px}
 .chb button{border:0;background:transparent;color:var(--dim);font:inherit;font-size:12px;font-weight:700;padding:5px 10px;border-radius:8px;cursor:pointer}
 .chb button.on{background:var(--tx);color:var(--bg)}
-#chv{display:block;width:100%;height:150px;direction:ltr;margin-top:6px}
+.cht{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:7px;flex-wrap:wrap}
+.chi,.chz{display:flex;gap:4px}
+.chi button{display:flex;align-items:center;gap:5px;border:1px solid var(--ln);background:transparent;color:var(--ft);font:inherit;font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;cursor:pointer;direction:ltr}
+.chi button i{width:9px;height:9px;border-radius:50%;opacity:.35}
+.chi button.on{color:var(--tx);border-color:#334156;background:rgba(255,255,255,.05)}.chi button.on i{opacity:1}
+.chz button{min-width:34px;height:30px;border:1px solid var(--ln);background:rgba(255,255,255,.04);color:var(--tx);font:inherit;font-size:15px;font-weight:700;border-radius:9px;cursor:pointer}
+.chw{position:relative;margin-top:6px}
+#chv{display:block;width:100%;height:210px;direction:ltr;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:crosshair}
+.chc.big #chv{height:400px}
+.chtip{position:absolute;top:6px;left:6px;display:none;pointer-events:none;background:rgba(10,13,19,.92);border:1px solid #334156;border-radius:10px;padding:7px 9px;font-size:11px;line-height:1.55;direction:ltr;text-align:left;color:var(--tx);box-shadow:0 6px 18px rgba(0,0,0,.4);min-width:132px}
+.chtip.on{display:block}.chtip b{font-weight:700}.chtip span{color:var(--dim)}
 .chf{display:flex;justify-content:space-between;font-size:10px;color:var(--ft);direction:ltr;padding:0 2px}
-.qbox{margin:8px 0 4px;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.12);background:#f7f9fc;color:#0d1526}
-.qhd,.qrow{display:grid;grid-template-columns:1.25fr 1.1fr .9fr 1fr;gap:6px;padding:8px 10px;align-items:center}
-.qhd{font-size:10.5px;color:#5c6b84;background:#eef2f8;font-weight:600}
-.qhd span{display:flex;flex-direction:column;line-height:1.25}.qhd i{font-style:normal;color:#8a97ac;font-weight:500}
+.qbox{margin:8px 0 4px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.13);background:linear-gradient(160deg,rgba(74,144,255,.10),rgba(255,255,255,.035) 55%);color:var(--tx);box-shadow:0 8px 22px rgba(0,0,0,.25)}
+.qhd,.qrow{display:grid;grid-template-columns:1.25fr 1.1fr .9fr 1fr;gap:6px;padding:8px 11px;align-items:center}
+.qhd{font-size:10.5px;color:#8EA3C2;background:rgba(255,255,255,.045);border-bottom:1px solid rgba(255,255,255,.08);font-weight:600}
+.qhd span{display:flex;flex-direction:column;line-height:1.25}.qhd i{font-style:normal;color:#5f7190;font-weight:500}
 .qrow .qc{display:flex;flex-direction:column;line-height:1.3;min-width:0}
-.qrow .qc b{font-size:15px;font-weight:700;direction:ltr;text-align:right;white-space:nowrap}
-.qrow .qc s{text-decoration:none;font-size:12px;color:#6b7891;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qrow .qc b{font-size:15px;font-weight:700;direction:ltr;text-align:right;white-space:nowrap;color:#EAF2FF}
+.qrow .qc s{text-decoration:none;font-size:12px;color:#8EA3C2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .qrow .q1 b{direction:rtl}
-.qsub{display:flex;flex-wrap:wrap;gap:4px 10px;padding:7px 10px 9px;font-size:11.5px;color:#334158;border-top:1px solid #e3e8f0;background:#fbfcfe}
-.qsub b{font-weight:700;direction:ltr;unicode-bidi:isolate}
+.qrow+.qsub{border-top:1px solid rgba(255,255,255,.07)}
+.qsub{display:flex;flex-wrap:wrap;gap:4px 10px;padding:7px 11px 10px;font-size:11.5px;color:#A9BBD6;background:rgba(0,0,0,.12)}
+.qsub b{font-weight:700;direction:ltr;unicode-bidi:isolate;color:#EAF2FF}
+.qsub+.qrow{border-top:1px solid rgba(255,255,255,.10)}
 .qtag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700}
 .qempty{font-size:12px;color:var(--dim);padding:6px 2px}
 body.pfon{background-color:#0A1024;background-image:radial-gradient(900px 520px at 85% -5%,rgba(124,58,237,.45),transparent 60%),radial-gradient(800px 600px at 0% 35%,rgba(14,165,233,.28),transparent 60%),radial-gradient(700px 500px at 90% 90%,rgba(16,185,129,.22),transparent 60%)}
@@ -1953,7 +2071,11 @@ details.adv[open]>summary{color:var(--tx)}
 <div class="chc" id="chc">
  <div class="chh"><b>SPX</b><span id="chInfo">جارٍ جلب الشموع…</span>
   <div class="chb" id="chB"><button type="button" data-iv="1">1د</button><button type="button" data-iv="5">5د</button><button type="button" data-iv="15">15د</button></div></div>
- <svg id="chv" viewBox="0 0 360 150" preserveAspectRatio="none"></svg>
+ <div class="cht">
+  <div class="chi" id="chI"><button type="button" data-ind="e9"><i style="background:#FBBF24"></i>EMA 9</button><button type="button" data-ind="e20"><i style="background:#A78BFA"></i>EMA 20</button><button type="button" data-ind="vw"><i style="background:#38BDF8"></i>VWAP</button></div>
+  <div class="chz" id="chZ"><button type="button" data-z="out" aria-label="تصغير">−</button><button type="button" data-z="in" aria-label="تكبير">+</button><button type="button" data-z="reset" aria-label="إعادة">↺</button><button type="button" data-z="big" aria-label="ملء">⤢</button></div>
+ </div>
+ <div class="chw" id="chW"><svg id="chv" viewBox="0 0 360 210" preserveAspectRatio="none"></svg><div class="chtip" id="chTip"></div></div>
  <div class="chf" id="chFoot"></div>
 </div>
 <div class="rng" id="rng" style="display:none">
@@ -3060,11 +3182,12 @@ const QREASON={SL:"وقف",Trail:"متحرك",TP:"هدف +50%",Time:"انتها�
 function qReason(r){r=String(r||"");if(!r)return "—";if(/^SL/.test(r))return "وقف";if(/^Trail/.test(r))return "متحرك";return QREASON[r]||r;}
 const QHEAD=`<div class="qhd"><span>العقد<i>الاستراتيجية · الوقت</i></span><span>القيمة السوقية<i>الكمية</i></span><span>آخر Bid<i>م. التكلفة</i></span><span>إجمالي الربح<i>الربح %</i></span></div>`;
 function qRow(c){
- const sc=c.side==="CALL"?"#0f9d6b":"#d6334a";
+ const sc=c.side==="CALL"?"var(--up)":"var(--dn)";
  const open=c.state==="open";
- const tag=open?(c.armed?`<span class="qtag" style="background:#dff7ec;color:#0f7a52">مُسلَّحة</span>`:`<span class="qtag" style="background:#e3ecff;color:#2b5fd9">مفتوحة</span>`)
-  :`<span class="qtag" style="background:${qOk(c.pnl_usd)&&c.pnl_usd>=0?"#dff7ec":"#fde4e7"};color:${qOk(c.pnl_usd)&&c.pnl_usd>=0?"#0f7a52":"#b4233a"}">مغلقة · ${qEsc(qReason(c.reason))} ${hm5(c.exit_t)}</span>`;
- const lc=x=>!qOk(x)?"#6b7891":(x>0?"#0f9d6b":(x<0?"#d6334a":"#6b7891"));
+ const win=qOk(c.pnl_usd)&&c.pnl_usd>=0;
+ const tag=open?(c.armed?`<span class="qtag" style="background:rgba(74,222,128,.16);color:#4ADE80">مُسلَّحة</span>`:`<span class="qtag" style="background:rgba(74,144,255,.18);color:#8ab6ff">مفتوحة</span>`)
+  :`<span class="qtag" style="background:${win?"rgba(74,222,128,.16)":"rgba(248,113,113,.16)"};color:${win?"#4ADE80":"#F87171"}">مغلقة · ${qEsc(qReason(c.reason))} ${hm5(c.exit_t)}</span>`;
+ const lc=x=>!qOk(x)?"#8EA3C2":(x>0?"#4ADE80":(x<0?"#F87171":"#8EA3C2"));
  const sub=[];
  if(c.rule==="live"){
   sub.push(c.armed?`التسليح ✓ عند <b>$${qF(c.arm_px)}</b>`:`التسليح عند <b>$${qF(c.arm_px)}</b> (+30%)`);
@@ -3078,8 +3201,8 @@ function qRow(c){
  }
  sub.push(`الذروة <b>$${qF(c.peak)}</b> (${qPc(c.peak_pct,0)})`);
  if(open)sub.push(`المتبقي <b>${qF(c.left_min,0)} د</b> من ${c.rule==="tp50"?30:60}`);
- if(c.skip)sub.push(`<span style="color:#b4233a">رأس المال لا يكفي ⇒ تُتخطّى في المحفظة</span>`);
- return `<div class="qrow"><div class="qc q1"><b>${qF(c.k,0)} <span style="color:${sc}">${c.side}</span></b><s>${qEsc(c.src==="BOT"?"البوت":(c.src==="A"?"نسخة البوت":c.name))} · ${hm5(c.t)} NY</s></div>`
+ if(c.skip)sub.push(`<span style="color:#FCA5A5">رأس المال لا يكفي ⇒ تُتخطّى في المحفظة</span>`);
+ return `<div class="qrow"><div class="qc q1"><b>${qF(c.k,0)} <span style="color:${sc}">${c.side}</span></b><s>${qEsc(c.src==="BOT"?"البوت":(c.src==="A"?"نسخة البوت":c.name))} · ${hm5(c.t)}</s></div>`
   +`<div class="qc"><b>${qUsd(c.mkt)}</b><s>${c.qty} عقد</s></div>`
   +`<div class="qc"><b>${qF(c.bid)}</b><s>${qF(c.c0)}</s></div>`
   +`<div class="qc"><b style="color:${lc(c.pnl_usd)}">${qUsd(c.pnl_usd,1)}</b><s style="color:${lc(c.pnl_pct)}">${qPc(c.pnl_pct)}</s></div></div>`
@@ -3092,10 +3215,17 @@ function qBotCards(D,live){
  return live?`<div class="qempty">لا صفقة للبوت خلال آخر 60 دقيقة</div>`:"";
 }
 
-/* ── الشارت ── */
-const CHK="liq_ch_iv";
-const CH={iv:1,d:null,at:0,busy:false,fail:0,err:null,t:null};
-try{const v=+localStorage.getItem(CHK);if(v===1||v===5||v===15)CH.iv=v;}catch(e){}
+/* ── الشارت [v3.1]: EMA 9/20 · منحنى VWAP · تكبير وتصغير وسحب بالأصابع · خط تقاطع بالقيم ──
+   الشموع: اليوم من liq (Render) + الجلسة السابقة من Tradier (Vercel) للإحماء وما قبل الافتتاح.
+   EMA تُحسب على كل الشموع (السابقة + اليوم) ⇒ قريبة من TradingView منذ أول شمعة.
+   VWAP: منحنى SPY دقيقة بدقيقة × نسبة SPX/SPY الحالية (نفس تحويل رقم VWAP في اللوحة). */
+const CHK="liq_ch_iv", CHS="liq_ch_set";
+const CH={iv:1,d:null,at:0,busy:false,fail:0,err:null,t:null,n:null,off:0,cross:null,big:false,
+          ind:{e9:true,e20:true,vw:true},rows:[],e9:[],e20:[],vw:[],vis:null};
+try{const v=+localStorage.getItem(CHK);if(v===1||v===5||v===15)CH.iv=v;
+ const o=JSON.parse(localStorage.getItem(CHS)||"{}");if(o.ind)Object.assign(CH.ind,o.ind);CH.big=!!o.big;}catch(e){}
+function chSave(){try{localStorage.setItem(CHK,String(CH.iv));localStorage.setItem(CHS,JSON.stringify({ind:CH.ind,big:CH.big}));}catch(e){}}
+function chCap(){return CH.iv===1?90:(CH.iv===5?78:26);}
 function chStop(){clearTimeout(CH.t);CH.t=null;}
 function chPoll(){
  chStop(); if(document.hidden||VIEW!=="main")return;
@@ -3111,41 +3241,120 @@ function chPoll(){
    const live=!LAST_D||LAST_D.session==="open";
    CH.t=setTimeout(chPoll,live?10000:60000);});
 }
-function chDraw(){
- const sv=document.getElementById("chv"),inf=document.getElementById("chInfo"),ft=document.getElementById("chFoot");
- if(!sv)return;
- document.querySelectorAll("#chB button").forEach(b=>b.classList.toggle("on",+b.dataset.iv===CH.iv));
- const all=(CH.d&&CH.d["m"+CH.iv])||[];
- const cap=CH.iv===1?90:(CH.iv===5?78:26);
- const B=all.filter(b=>b&&b.length>=5&&[1,2,3,4].every(i=>qOk(b[i]))).slice(-cap);
- if(!B.length){sv.innerHTML="";ft.innerHTML="";
-  inf.textContent=CH.err?`تعذّر جلب الشموع: ${CH.err}`:(CH.d?"لا شموع بعد (تبدأ 09:30 NY)":"جارٍ جلب الشموع…");return;}
- let hi=-Infinity,lo=Infinity;for(const b of B){hi=Math.max(hi,b[2]);lo=Math.min(lo,b[3]);}
- const vw=LAST_D&&LAST_D.vwap&&qOk(LAST_D.vwap.vwap_und)?Number(LAST_D.vwap.vwap_und):null;
- if(vw!=null&&vw<hi+(hi-lo)&&vw>lo-(hi-lo)){hi=Math.max(hi,vw);lo=Math.min(lo,vw);}
- if(hi-lo<1){hi+=0.5;lo-=0.5;}
- const W=360,H=150,PT=11,PB=8,PR=42,cw=(W-PR)/B.length;
- const y=v=>PT+(hi-v)/(hi-lo)*(H-PT-PB);
- let g="";
- for(let k=0;k<=3;k++){const v=lo+(hi-lo)*k/3,yy=y(v);
-  g+=`<line x1="0" x2="${W-PR}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="#212b3c" stroke-width="1"/>`
-   +`<text x="${W-PR+3}" y="${(yy+3).toFixed(1)}" font-size="9" fill="#7f8da5">${v.toFixed(0)}</text>`;}
- if(vw!=null){const yy=y(vw);g+=`<line x1="0" x2="${W-PR}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="#4a90ff" stroke-width="1" stroke-dasharray="4 3"/>`
-  +`<text x="2" y="${(yy-3).toFixed(1)}" font-size="9" fill="#4a90ff">VWAP ${vw.toFixed(1)}</text>`;}
- B.forEach((b,i)=>{const [t,o,h,l,c,lv]=b,x=i*cw+cw/2,up=c>=o,col=up?"#2dd4a0":"#ff5c72";
-  const bw=Math.max(1,cw*0.66),yt=y(Math.max(o,c)),yb=y(Math.min(o,c));
-  g+=`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${y(h).toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"${lv?' opacity=".6"':''}/>`
-   +`<rect class="cnd" x="${(x-bw/2).toFixed(1)}" y="${yt.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,yb-yt).toFixed(1)}" fill="${col}"${lv?' opacity=".6"':''}/>`;});
- const lc=B[B.length-1][4],yl=y(lc);
- g+=`<line x1="0" x2="${W-PR}" y1="${yl.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="#e9eef6" stroke-width=".6" stroke-dasharray="2 3" opacity=".6"/>`
-  +`<rect x="${W-PR+1}" y="${(yl-7).toFixed(1)}" width="${PR-2}" height="13" rx="3" fill="#e9eef6"/><text x="${W-PR+3}" y="${(yl+3).toFixed(1)}" font-size="9.5" font-weight="700" fill="#0a0d13">${lc.toFixed(1)}</text>`;
- sv.innerHTML=g;
- const age=CH.at?Math.round((Date.now()-CH.at)/1000):null;
- inf.textContent=`${CH.iv} د · ${B.length} شمعة · أعلى ${hi.toFixed(1)} · أدنى ${lo.toFixed(1)}${CH.err?` · ⚠ ${CH.err}`:(age!=null&&age>30?` · عمرها ${age} ث`:"")}`;
- ft.innerHTML=`<span>${B[0][0]}</span><span>${B[Math.floor(B.length/2)][0]}</span><span>${B[B.length-1][0]} NY</span>`;
+function chMin(t){const p=String(t||"").split(":");return p.length>=2?(+p[0])*60+(+p[1]):null;}
+/* EMA بنفس تعريف TradingView: أول قيمة = متوسط أول N إغلاقات ثم k = 2/(N+1) */
+function chEma(cl,N){const out=new Array(cl.length).fill(null);if(cl.length<N)return out;
+ let s=0;for(let i=0;i<N;i++)s+=cl[i];let e=s/N;out[N-1]=e;const k=2/(N+1);
+ for(let i=N;i<cl.length;i++){e=cl[i]*k+e*(1-k);out[i]=e;}return out;}
+function chBuild(){
+ const D=CH.d||{}, key="m"+CH.iv, ok=b=>b&&b.length>=5&&[1,2,3,4].every(i=>qOk(b[i]));
+ const today=(D[key]||[]).filter(ok).map(b=>({t:b[0],d:D.day||"",o:+b[1],h:+b[2],l:+b[3],c:+b[4],lv:!!b[5],p:0}));
+ const P=D.prev, prev=(P&&P.day&&P.day!==D.day&&P[key]?P[key]:[]).filter(ok)
+   .map(b=>({t:b[0],d:P.day,o:+b[1],h:+b[2],l:+b[3],c:+b[4],lv:false,p:1}));
+ const rows=prev.concat(today), cl=rows.map(r=>r.c);
+ CH.rows=rows; CH.e9=chEma(cl,9); CH.e20=chEma(cl,20);
+ // VWAP: دقيقة SPY ⇒ أقرب دقيقة ≤ نهاية الشمعة داخلها · × النسبة الحالية
+ const ser=(D.vwap&&D.vwap.series)||[], ratio=LAST_D&&LAST_D.vwap&&qOk(LAST_D.vwap.ratio)?+LAST_D.vwap.ratio:null;
+ CH.ratio=ratio;
+ const vm=new Map(); for(const x of ser){const m=chMin(x[0]);if(m!=null&&qOk(x[1]))vm.set(m,+x[1]);}
+ const ks=[...vm.keys()].sort((a,b)=>a-b);
+ CH.vw=rows.map(r=>{if(r.p||!ratio||!ks.length)return null;const st=chMin(r.t),en=st+CH.iv-1;
+  let best=null;for(let i=ks.length-1;i>=0;i--){if(ks[i]<=en){if(ks[i]>=st-(CH.iv===1?0:CH.iv))best=ks[i];break;}}
+  return best==null?null:vm.get(best)*ratio;});
 }
-document.addEventListener("click",e=>{const b=e.target&&e.target.closest&&e.target.closest("#chB button");
- if(!b)return;CH.iv=+b.dataset.iv;try{localStorage.setItem(CHK,String(CH.iv));}catch(x){}chDraw();});
+function chWin(){
+ const N=CH.rows.length,cap=chCap();
+ let n=CH.n==null?cap:CH.n; n=Math.max(Math.min(10,N),Math.min(n,N));
+ let off=Math.max(0,Math.min(CH.off,N-n)); CH.off=off;
+ return {a:N-off-n,b:N-off,n:n,N:N};
+}
+function chDraw(){
+ const sv=document.getElementById("chv"),inf=document.getElementById("chInfo"),ft=document.getElementById("chFoot"),tip=document.getElementById("chTip");
+ if(!sv)return;
+ document.getElementById("chc").classList.toggle("big",CH.big);
+ document.querySelectorAll("#chB button").forEach(b=>b.classList.toggle("on",+b.dataset.iv===CH.iv));
+ document.querySelectorAll("#chI button").forEach(b=>b.classList.toggle("on",!!CH.ind[b.dataset.ind]));
+ chBuild();
+ if(!CH.rows.length){sv.innerHTML="";ft.innerHTML="";tip.classList.remove("on");CH.vis=null;
+  inf.textContent=CH.err?`تعذّر جلب الشموع: ${CH.err}`:(CH.d?"لا شموع بعد (تبدأ 09:30 NY)":"جارٍ جلب الشموع…");return;}
+ const w=chWin(), R=CH.rows.slice(w.a,w.b);
+ const W=Math.max(240,Math.round(sv.clientWidth||360)), H=Math.max(150,Math.round(sv.clientHeight||210));
+ sv.setAttribute("viewBox",`0 0 ${W} ${H}`);
+ const PT=12,PB=8,PR=46,cw=(W-PR)/R.length;
+ let hi=-Infinity,lo=Infinity;
+ R.forEach((r,i)=>{hi=Math.max(hi,r.h);lo=Math.min(lo,r.l);
+  for(const [on,arr] of [[CH.ind.e9,CH.e9],[CH.ind.e20,CH.e20],[CH.ind.vw,CH.vw]]){const v=arr[w.a+i];
+   if(on&&v!=null&&v<r.h+(r.h-r.l)*6+5&&v>r.l-(r.h-r.l)*6-5){hi=Math.max(hi,v);lo=Math.min(lo,v);}}});
+ if(hi-lo<1){hi+=0.5;lo-=0.5;} const pad=(hi-lo)*0.04; hi+=pad; lo-=pad;
+ const y=v=>PT+(hi-v)/(hi-lo)*(H-PT-PB), X=i=>i*cw+cw/2;
+ let g="";
+ for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=y(v);
+  g+=`<line x1="0" x2="${W-PR}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="#1c2535" stroke-width="1"/>`
+   +`<text x="${W-PR+4}" y="${(yy+3).toFixed(1)}" font-size="10" fill="#7f8da5">${v.toFixed(0)}</text>`;}
+ R.forEach((r,i)=>{if(i>0&&r.d!==R[i-1].d){const x=(i*cw).toFixed(1);
+  g+=`<line x1="${x}" x2="${x}" y1="${PT}" y2="${H-PB}" stroke="#4a5a75" stroke-dasharray="3 3"/><text x="${(+x+3).toFixed(1)}" y="${PT+9}" font-size="9" fill="#7f8da5">${qDM(r.d)}</text>`;}});
+ R.forEach((r,i)=>{const x=X(i),up=r.c>=r.o,col=up?"#2dd4a0":"#ff5c72",op=r.lv?' opacity=".55"':(r.p?' opacity=".7"':"");
+  const bw=Math.max(1,cw*0.66),yt=y(Math.max(r.o,r.c)),yb=y(Math.min(r.o,r.c));
+  g+=`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${y(r.h).toFixed(1)}" y2="${y(r.l).toFixed(1)}" stroke="${col}" stroke-width="1"${op}/>`
+   +`<rect class="cnd" x="${(x-bw/2).toFixed(1)}" y="${yt.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,yb-yt).toFixed(1)}" fill="${col}"${op}/>`;});
+ const line=(arr,col,wd,da)=>{let d="",pen=false;R.forEach((r,i)=>{const v=arr[w.a+i];
+   if(v==null||!isFinite(v)){pen=false;return;}d+=(pen?"L":"M")+X(i).toFixed(1)+" "+y(v).toFixed(1)+" ";pen=true;});
+   return d?`<path class="ind" d="${d}" fill="none" stroke="${col}" stroke-width="${wd}"${da?` stroke-dasharray="${da}"`:""} stroke-linejoin="round"/>`:"";};
+ if(CH.ind.vw)g+=line(CH.vw,"#38BDF8",1.6,"");
+ if(CH.ind.e20)g+=line(CH.e20,"#A78BFA",1.4,"");
+ if(CH.ind.e9)g+=line(CH.e9,"#FBBF24",1.4,"");
+ const L=R[R.length-1],yl=y(L.c);
+ g+=`<line x1="0" x2="${W-PR}" y1="${yl.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="#e9eef6" stroke-width=".6" stroke-dasharray="2 3" opacity=".55"/>`
+  +`<rect x="${W-PR+1}" y="${(yl-8).toFixed(1)}" width="${PR-2}" height="15" rx="3" fill="#e9eef6"/><text x="${W-PR+4}" y="${(yl+3.5).toFixed(1)}" font-size="10" font-weight="700" fill="#0a0d13">${L.c.toFixed(1)}</text>`;
+ // خط التقاطع
+ let tipH="";
+ if(CH.cross!=null&&CH.cross>=w.a&&CH.cross<w.b){const i=CH.cross-w.a,r=R[i],x=X(i).toFixed(1);
+  g+=`<line x1="${x}" x2="${x}" y1="${PT}" y2="${H-PB}" stroke="#cbd5e1" stroke-width=".7" stroke-dasharray="3 2"/>`
+   +`<line x1="0" x2="${W-PR}" y1="${y(r.c).toFixed(1)}" y2="${y(r.c).toFixed(1)}" stroke="#cbd5e1" stroke-width=".7" stroke-dasharray="3 2"/>`;
+  const f=v=>v==null?"—":v.toFixed(2), chg=r.o?((r.c/r.o-1)*100):null;
+  tipH=`<b>${qDM(r.d)} ${r.t}${r.p?" · سابقة":""}${r.lv?" · جارية":""}</b><br><span>O</span> ${f(r.o)} <span>H</span> ${f(r.h)}<br><span>L</span> ${f(r.l)} <span>C</span> <b style="color:${r.c>=r.o?"#2dd4a0":"#ff5c72"}">${f(r.c)}</b> ${chg==null?"":`(${chg>=0?"+":""}${chg.toFixed(2)}%)`}`
+   +(CH.ind.e9?`<br><span style="color:#FBBF24">EMA9</span> ${f(CH.e9[CH.cross])}`:"")+(CH.ind.e20?`<br><span style="color:#A78BFA">EMA20</span> ${f(CH.e20[CH.cross])}`:"")
+   +(CH.ind.vw?`<br><span style="color:#38BDF8">VWAP</span> ${f(CH.vw[CH.cross])}`:"");
+  tip.style.left=(X(i)/W>0.5?"6px":"auto");tip.style.right=(X(i)/W>0.5?"auto":"6px");
+ }else CH.cross=null;
+ tip.innerHTML=tipH; tip.classList.toggle("on",!!tipH);
+ sv.innerHTML=g; CH.vis={a:w.a,b:w.b,cw:cw,W:W,PR:PR};
+ const age=CH.at?Math.round((Date.now()-CH.at)/1000):null;
+ const lv=x=>x==null?"—":x.toFixed(1), last=CH.rows.length-1;
+ inf.textContent=`${CH.iv} د · ${R.length}${w.N>R.length?"/"+w.N:""} شمعة${CH.off?" · ◀ سابق":""} · EMA9 ${lv(CH.e9[last])} · EMA20 ${lv(CH.e20[last])} · VWAP ${lv(CH.vw[last])}${CH.err?` · ⚠ ${CH.err}`:(age!=null&&age>30?` · عمرها ${age} ث`:"")}`;
+ ft.innerHTML=`<span>${R[0].t}</span><span>${R[Math.floor(R.length/2)].t}</span><span>${L.t} NY</span>`;
+}
+/* اللمس والفأرة: سحب = تمرير · قرصة/عجلة/أزرار = تكبير وتصغير · نقرة = خط التقاطع */
+const CP={pts:new Map(),x0:0,off0:0,n0:0,d0:0,moved:false,cx0:0};
+function chIdx(clientX){const sv=document.getElementById("chv"),v=CH.vis;if(!v)return null;
+ const rc=sv.getBoundingClientRect(),x=(clientX-rc.left)/rc.width*v.W;if(x>v.W-v.PR)return null;
+ return Math.max(v.a,Math.min(v.b-1,v.a+Math.floor(x/v.cw)));}
+function chZoom(f){const w=chWin();const N=w.N;CH.n=Math.round(Math.max(Math.min(10,N),Math.min(N,w.n*f)));chDraw();}
+(function(){const sv=document.getElementById("chv");if(!sv)return;
+ sv.addEventListener("pointerdown",e=>{CP.pts.set(e.pointerId,e.clientX);try{sv.setPointerCapture(e.pointerId);}catch(x){}
+  const w=chWin();CP.off0=CH.off;CP.n0=w.n;CP.moved=false;CP.cx0=e.clientX;
+  if(CP.pts.size===2){const a=[...CP.pts.values()];CP.d0=Math.abs(a[0]-a[1])||1;CP.moved=true;}
+  else CP.x0=e.clientX;});
+ sv.addEventListener("pointermove",e=>{if(!CP.pts.has(e.pointerId))return;CP.pts.set(e.pointerId,e.clientX);
+  const v=CH.vis;if(!v)return;const rc=sv.getBoundingClientRect();
+  if(CP.pts.size>=2){const a=[...CP.pts.values()],d=Math.abs(a[0]-a[1])||1;
+   const N=CH.rows.length;CH.n=Math.round(Math.max(Math.min(10,N),Math.min(N,CP.n0*CP.d0/d)));chDraw();return;}
+  const dx=e.clientX-CP.x0;if(Math.abs(dx)>6)CP.moved=true;if(!CP.moved)return;
+  const bars=dx/rc.width*v.W/v.cw;CH.off=Math.round(CP.off0+bars);CH.cross=null;chDraw();});
+ const up=e=>{const wasTap=!CP.moved&&CP.pts.size===1;CP.pts.delete(e.pointerId);
+  if(wasTap){const i=chIdx(e.clientX);CH.cross=(i==null||CH.cross===i)?null:i;chDraw();}
+  if(CP.pts.size===1){CP.x0=[...CP.pts.values()][0];CP.off0=CH.off;}};
+ sv.addEventListener("pointerup",up);sv.addEventListener("pointercancel",e=>{CP.pts.delete(e.pointerId);});
+ sv.addEventListener("wheel",e=>{e.preventDefault();chZoom(e.deltaY>0?1.2:1/1.2);},{passive:false});
+})();
+document.addEventListener("click",e=>{const t=e.target&&e.target.closest&&e.target;if(!t)return;
+ const b=t.closest("#chB button");if(b){CH.iv=+b.dataset.iv;CH.n=null;CH.off=0;CH.cross=null;chSave();chDraw();return;}
+ const ib=t.closest("#chI button");if(ib){const k=ib.dataset.ind;CH.ind[k]=!CH.ind[k];chSave();chDraw();return;}
+ const z=t.closest("#chZ button");if(z){const k=z.dataset.z;
+  if(k==="in")chZoom(1/1.5);else if(k==="out")chZoom(1.5);
+  else if(k==="reset"){CH.n=null;CH.off=0;CH.cross=null;chDraw();}
+  else if(k==="big"){CH.big=!CH.big;chSave();chDraw();}}});
+window.addEventListener("resize",()=>{try{chDraw();}catch(e){}});
 
 /* ── العرض: SPX أو المحفظة ── */
 const VK="liq_view";
