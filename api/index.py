@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.2)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.2.1)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊿+ [v3.2.1] (25 أكتوبر · ملاحظة خالد) نقطة الكول تحت الشمعة والبوت فوقها · شعار المكتبة
+      داخل الشارت أُخفي (كان يغطّي الشموع وخط المسيطرين) والإسناد صار رابطاً نصياً أسفله.
   ㊿ [v3.2] (24 أكتوبر · القرارات 240 · 251 · 252 · يتطلب liq v3.7 على Render)
      ① الرأس 4 أسطر: السعر (يتحدّث كل 2 ث من Render) والتغيّر · توقيت NY والجلسة ·
         VIX · VIX1D · التركّز · نظام الغاما ومستوى الانقلاب. نطاق اليوم باقٍ · مربّع OI حُذف.
@@ -377,7 +379,7 @@ except Exception:
     from datetime import timezone as _tz, timedelta as _td
     NY = _tz(_td(hours=-4))
 
-VERSION    = "3.2"
+VERSION    = "3.2.1"
 TD_BASE    = "https://api.tradier.com/v1"
 TD_TOKEN   = os.getenv("TRADIER_PROD_TOKEN", "").strip()
 TD_TIMEOUT = float(os.getenv("TD_TIMEOUT", "8"))
@@ -3565,7 +3567,7 @@ function chEnsure(){
  if(CH.ch)return true;
  const L=window.LightweightCharts, el=document.getElementById("chMain"), es=document.getElementById("chSub");
  if(!L||!el||!es)return false;
- const base={layout:{background:{type:"solid",color:"transparent"},textColor:"#8EA3C2",fontSize:10,fontFamily:"-apple-system,system-ui,sans-serif"},
+ const base={layout:{background:{type:"solid",color:"transparent"},textColor:"#8EA3C2",fontSize:10,fontFamily:"-apple-system,system-ui,sans-serif",attributionLogo:false},
   grid:{vertLines:{color:"rgba(255,255,255,.035)"},horzLines:{color:"rgba(255,255,255,.05)"}},
   rightPriceScale:{borderVisible:false,scaleMargins:{top:.08,bottom:.08}},
   timeScale:{borderVisible:false,timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:7,minBarSpacing:1.5,
@@ -3618,7 +3620,7 @@ function chDraw(){
  CH.s.vol.setData(CH.ind.vol?R.map(r=>{const v=chVolAt(r);return v==null?{time:r.t}:{time:r.t,value:v,color:r.c>=r.o?"rgba(45,212,160,.35)":"rgba(255,92,114,.35)"};}):[]);
  const mk=[];
  if(CH.iv===5&&CH.ind.pine){const have=new Set(R.map(r=>r.t));
-  for(const x of CH.pine){const t=chT(x[0],x[1]);if(t!=null&&have.has(t))mk.push({time:t,position:"aboveBar",shape:"circle",size:.7,
+  for(const x of CH.pine){const t=chT(x[0],x[1]);if(t!=null&&have.has(t))mk.push({time:t,position:x[2]==="C"?"belowBar":"aboveBar",shape:"circle",size:.7,
    color:x[2]==="C"?"#00C853":"#D50000"});}}
  mk.sort((a,b)=>a.time-b.time);CH.s.c.setMarkers(mk);
  const sub=document.getElementById("chSub");if(sub)sub.style.display=CH.ind.dom?"":"none";
@@ -3631,7 +3633,8 @@ function chDraw(){
  document.querySelectorAll("#chB button").forEach(b=>b.classList.toggle("on",+b.dataset.iv===CH.iv));
  document.querySelectorAll("#chI button").forEach(b=>b.classList.toggle("on",!!CH.ind[b.dataset.ind]));
  const ft=document.getElementById("chFoot");
- if(ft)ft.textContent=CH.iv===5&&CH.ind.pine?"• أخضر = إشارة كول · • أحمر = إشارة بوت (مؤشر SPY 5M على شموع SPY · قد يختلف حجم TradingView)":"";
+ if(ft)ft.innerHTML=(CH.iv===5&&CH.ind.pine?"• أخضر تحت الشمعة = إشارة كول · • أحمر فوقها = إشارة بوت (مؤشر SPY 5M على شموع SPY · قد يختلف حجم TradingView) · ":"")
+  +`الشارت: <a href="https://www.tradingview.com/" target="_blank" rel="noopener" style="color:inherit">TradingView Lightweight Charts™</a>`;
 }
 function chHead(){
  // السعر كل 2 ث من Render (آخر قراءة للجامع) — أثناء الجلسة فقط
