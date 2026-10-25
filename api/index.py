@@ -1,8 +1,25 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.2)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊿ [v3.2] (24 أكتوبر · القرارات 240 · 251 · 252 · يتطلب liq v3.7 على Render)
+     ① الرأس 4 أسطر: السعر (يتحدّث كل 2 ث من Render) والتغيّر · توقيت NY والجلسة ·
+        VIX · VIX1D · التركّز · نظام الغاما ومستوى الانقلاب. نطاق اليوم باقٍ · مربّع OI حُذف.
+     ② الشارت بمكتبة TradingView Lightweight Charts 4.2: صليب حر بسطر قيم صغير أعلى الشارت
+        (وقت بداية الشمعة NY · OHLC · المتوسطات) · مسافة يمين الشمعة الحية · قرصة وسحب ·
+        ملء الشاشة · 1/5/15 · EMA 9/20 · VWAP · حجم SPY (يُظهر ويُخفى) · خط المسيطرين تحت
+        الشارت بالمحور نفسه · نقاط إشارة Pine (خضراء كول · حمراء بوت) على 5 د فقط.
+     ③ نقاط Pine تُحسب هنا من شموع SPY 5 د (Tradier · RTH · إحماء 7 أيام) مطابقة لملف
+        SPY_1m_v4_7 بإعداداته الافتراضية (Normal ≥4 · volMult 1.5 · RSI 14 55/45 · VWAP
+        الجلسة · ملف حجم 20 خانة 70% · الشمعة المغلقة فقط). نداء واحد كل 60 ث على الأكثر.
+     ④ /board?part=tick كل 2 ث: الشموع الجديدة فقط (since) + بطاقات بوت السيولة الجديد +
+        عدّاد النداءات لكل مفتاح — من Render لا من Tradier. اللوحة تبلّغ Render بنداءاتها
+        (?td=) فيحتسبها في حصّة مفتاح البيانات. /json أبطأ أثناء الجلسة (r=15 افتراضياً).
+     ⑤ القرارات: صفقة بوت السيولة الجديد (الاندفاع) فقط — العقد · الدخول · الآن · أقرب
+        درجة · مُسلَّحة؟ · وقف السلّم · المنقضي · ومسار SPY وحالة الحي.
+     ⑥ المحفظة: G4 = بوت السيولة الجديد بطلاً + كل ظل معتمد + البوت القديم مرجعاً + العشوائي
+        · الأسبوعي والشهري · بحذف الأفضل · الفرق عن العشوائي.
   ㊾ [v3.1] (19 أكتوبر · طلب خالد) — شارت بمزايا TradingView الأساسية
      ① EMA 9 و EMA 20 (تعريف TradingView: البذرة متوسط أول N ثم k=2/(N+1)) على كل الشموع
         بما فيها الجلسة السابقة ⇒ قيم صحيحة منذ أول شمعة اليوم.
@@ -360,6 +377,7 @@ except Exception:
     from datetime import timezone as _tz, timedelta as _td
     NY = _tz(_td(hours=-4))
 
+VERSION    = "3.2"
 TD_BASE    = "https://api.tradier.com/v1"
 TD_TOKEN   = os.getenv("TRADIER_PROD_TOKEN", "").strip()
 TD_TIMEOUT = float(os.getenv("TD_TIMEOUT", "8"))
@@ -397,7 +415,7 @@ VWAP_GATE_SPY = float(os.getenv("VWAP_GATE_SPY", "0.40"))
 # تقييد حجم الشمعة الشاذة: أضعاف وسيط أحجام شموع اليوم
 VWAP_CAP_MULT = float(os.getenv("VWAP_CAP_MULT", "5"))
 VWAP_CACHE_SEC = 30.0
-_VWAP = {"ts": 0.0, "day": None, "val": None, "series": []}
+_VWAP = {"ts": 0.0, "day": None, "val": None, "series": [], "vol": []}
 _CLOCK = {"ts": 0.0, "val": None}
 CLOCK_CACHE_SEC = 60.0
 # ساعات جلسة كاملة × أيام تداول السنة — مقام VIX1D
@@ -688,6 +706,11 @@ def _spy_vwap():
         print("vwap series err:", e)
         ser = []
     _VWAP["ts"], _VWAP["day"], _VWAP["val"], _VWAP["series"] = now, day, val, ser
+    try:                                                     # [v3.2] حجم SPY للشارت
+        _VWAP["vol"] = [[str(b.get("time") or "")[11:16], int(_f(b.get("volume")))]
+                        for b in bars if isinstance(b, dict) and _f(b.get("volume")) > 0]
+    except Exception:
+        _VWAP["vol"] = []
     return val
 
 
@@ -1408,7 +1431,9 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"ok": True, "token": bool(TD_TOKEN), "version": "3.1", "board_key": bool(BOT_KEY),
+    return {"ok": True, "token": bool(TD_TOKEN), "version": VERSION, "board_key": bool(BOT_KEY),
+            "pine": {"err": _SPY5.get("err"), "bars": len(_SPY5.get("bars") or []),
+                     "dots": len(_SPY5.get("dots") or [])},              # [v3.2]
             "calls_min": calls_per_min(),                  # [v2.5]
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
@@ -1477,7 +1502,7 @@ def as_bars(opt: str = "", und: str = "SPX", start: str = ""):
 # ═══ [v3.0] وسيط /board ⇒ Render /liq_board (المفتاح في الخادم فقط) ═══
 BOT_URL = os.getenv("BOT_URL", "https://spx-paper-bot.onrender.com").strip().rstrip("/")
 BOT_KEY = os.getenv("BOT_ACCESS_KEY", "").strip()
-BOARD_CACHE_SEC = float(os.getenv("BOARD_CACHE_SEC", "3"))
+BOARD_CACHE_SEC = float(os.getenv("BOARD_CACHE_SEC", "1.5"))     # [v3.2] كان 3 (التحديث كل 2 ث)
 _BOARD_C = {}
 _BOARD_LOCK = threading.Lock()
 _RE_G = re.compile(r"^G\d{1,2}$")
@@ -1488,7 +1513,7 @@ def board(part="all", g="", s=""):
     """يقرأ /liq_board من Render بالمفتاح ويعيد الرد كما هو. المعاملات مقيّدة بقائمة
        بيضاء (لا شيء من المستخدم يدخل الرابط حرفياً) · ذاكرة قصيرة BOARD_CACHE_SEC
        لكل طلب متطابق (عدة متصفحات ⇒ طلب واحد لـRender)."""
-    part = part if part in ("all", "bars", "cards", "book") else "all"
+    part = part if part in ("all", "bars", "cards", "book", "live") else "all"
     g = g if _RE_G.match(g or "") else ""
     s = s if _RE_S.match(s or "") else ""
     if not BOT_KEY:
@@ -1501,7 +1526,8 @@ def board(part="all", g="", s=""):
             return c[1]
     try:
         r = _http().get(BOT_URL + "/liq_board", timeout=8.0,
-                        params={"key": BOT_KEY, "part": part, "g": g, "s": s})
+                        params={"key": BOT_KEY, "part": part, "g": g, "s": s,
+                                "td": calls_per_min()})            # [v3.2] نداءات اللوحة لحصّة Render
         if r.status_code == 401:
             return {"ok": False, "err": "المفتاح مرفوض من Render (BOT_ACCESS_KEY ≠ ACCESS_KEY)"}
         if r.status_code == 404:
@@ -1537,6 +1563,224 @@ def board(part="all", g="", s=""):
                 for k in sorted(_BOARD_C, key=lambda k: _BOARD_C[k][0])[:32]:
                     _BOARD_C.pop(k, None)
     return js
+
+
+# ═══ [v3.2] نقاط إشارة Pine على شموع SPY 5 د (SPY_1m_v4_7 · الإعدادات الافتراضية) ═══
+PINE_FAST, PINE_SLOW, PINE_RSI = 9, 20, 14
+PINE_RSI_BULL, PINE_RSI_BEAR = 55.0, 45.0
+PINE_VOLMULT = float(os.getenv("PINE_VOLMULT", "1.5"))
+PINE_STRONG = int(os.getenv("PINE_STRONG", "4"))          # Sensitivity=Normal
+PINE_DAYS = int(os.getenv("PINE_DAYS", "7"))              # أيام الإحماء (تقويمية)
+PINE_TTL = float(os.getenv("PINE_TTL", "60"))             # أقل فاصل بين نداءين لشموع SPY 5 د
+_SPY5 = {"t": 0.0, "bars": [], "dots": [], "err": None, "fp": None}
+_SPY5_LOCK = threading.Lock()
+
+
+def _ema_tv(vals, n):
+    """ta.ema: أول قيمة = متوسط أول n ثم k = 2/(n+1) · قبلها None."""
+    out = [None] * len(vals)
+    if len(vals) < n:
+        return out
+    e = sum(vals[:n]) / n
+    out[n - 1] = e
+    k = 2.0 / (n + 1)
+    for i in range(n, len(vals)):
+        e = vals[i] * k + e * (1 - k)
+        out[i] = e
+    return out
+
+
+def _rsi_tv(cl, n):
+    """ta.rsi: متوسط Wilder (ta.rma يبدأ بمتوسط بسيط لأول n تغيّر)."""
+    out = [None] * len(cl)
+    if len(cl) <= n:
+        return out
+    up = [max(cl[i] - cl[i - 1], 0.0) for i in range(1, len(cl))]
+    dn = [max(cl[i - 1] - cl[i], 0.0) for i in range(1, len(cl))]
+    au, ad = sum(up[:n]) / n, sum(dn[:n]) / n
+
+    def rs(a, d):
+        if d == 0:
+            return 100.0 if a > 0 else 50.0 if a == 0 else 0.0
+        return 100.0 - 100.0 / (1.0 + a / d)
+    out[n] = rs(au, ad)
+    for i in range(n + 1, len(cl)):
+        au = (au * (n - 1) + up[i - 1]) / n
+        ad = (ad * (n - 1) + dn[i - 1]) / n
+        out[i] = rs(au, ad)
+    return out
+
+
+def pine_eval(bars):
+    """bars: [{"d","hm","o","h","l","c","v"}] شموع RTH 5 د متتالية عبر الأيام (المغلقة فقط).
+       يرجع لكل شمعة (bullPts, bearPts, newBull, newBear) — منطق Pine حرفياً."""
+    n = len(bars)
+    cl = [b["c"] for b in bars]
+    ef, es = _ema_tv(cl, PINE_FAST), _ema_tv(cl, PINE_SLOW)
+    rsi = _rsi_tv(cl, PINE_RSI)
+    out = []
+    ctpv = cvol = 0.0
+    shi = slo = None
+    aTP, aV = [], []
+    prev_bull = prev_bear = False
+    for i, b in enumerate(bars):
+        new_s = i == 0 or b["d"] != bars[i - 1]["d"]
+        tp = (b["h"] + b["l"] + b["c"]) / 3.0
+        if new_s:
+            ctpv = cvol = 0.0
+            aTP, aV = [], []
+            shi, slo = b["h"], b["l"]
+        else:
+            shi, slo = max(shi, b["h"]), min(slo, b["l"])
+        ctpv += tp * b["v"]
+        cvol += b["v"]
+        vwap = ctpv / cvol if cvol > 0 else tp
+        aTP.append(tp)
+        aV.append(b["v"])
+        vah = val = None
+        rng = shi - slo
+        if rng > 0:
+            bkt = [0.0] * 20
+            for x, v in zip(aTP, aV):
+                bi = max(min(int(math.floor((x - slo) / rng * 20.0)), 19), 0)
+                bkt[bi] += v
+            p_idx, p_vol, tot = 0, 0.0, 0.0
+            for j in range(20):
+                tot += bkt[j]
+                if bkt[j] > p_vol:
+                    p_vol, p_idx = bkt[j], j
+            va_v, hi_i, lo_i, lp, hp = p_vol, p_idx, p_idx, p_idx - 1, p_idx + 1
+            goal = tot * 0.70
+            for _k in range(40):
+                if va_v >= goal:
+                    break
+                lv = bkt[lp] if lp >= 0 else 0.0
+                hv = bkt[hp] if hp <= 19 else 0.0
+                if hv >= lv:
+                    va_v += hv
+                    hi_i, hp = hp, hp + 1
+                else:
+                    va_v += lv
+                    lo_i, lp = lp, lp - 1
+            vah = slo + (hi_i + 1.0) / 20.0 * rng
+            val = slo + lo_i / 20.0 * rng
+        vols = [x["v"] for x in bars[max(0, i - 19):i + 1]]
+        vavg = sum(vols) / 20.0 if i >= 19 else None
+        hv_ = vavg is not None and b["v"] > vavg * PINE_VOLMULT
+        f, s = ef[i], es[i]
+        fp, sp_ = (ef[i - 1], es[i - 1]) if i > 0 else (None, None)
+        ok_e = f is not None and s is not None
+        cross_up = ok_e and fp is not None and sp_ is not None and f > s and fp <= sp_
+        cross_dn = ok_e and fp is not None and sp_ is not None and f < s and fp >= sp_
+        r = rsi[i]
+        bull = (2 if b["c"] > vwap else 0) + (1 if ok_e and f > s else 0) + \
+            (1 if r is not None and r > PINE_RSI_BULL else 0) + \
+            (1 if hv_ and b["c"] > b["o"] else 0) + (1 if vah is not None and b["c"] > vah else 0) + \
+            (1 if cross_up else 0)
+        bear = (2 if b["c"] < vwap else 0) + (1 if ok_e and f < s else 0) + \
+            (1 if r is not None and r < PINE_RSI_BEAR else 0) + \
+            (1 if hv_ and b["c"] < b["o"] else 0) + (1 if val is not None and b["c"] < val else 0) + \
+            (1 if cross_dn else 0)
+        is_bull, is_bear = bull >= PINE_STRONG, bear >= PINE_STRONG
+        out.append((bull, bear, is_bull and not prev_bull, is_bear and not prev_bear))
+        prev_bull, prev_bear = is_bull, is_bear
+    return out
+
+
+def _spy5_refresh():
+    """شموع SPY 5 د المغلقة (RTH) لآخر PINE_DAYS يوماً — نداء واحد كل PINE_TTL ث على الأكثر."""
+    ny = datetime.now(NY)
+    now = ny.timestamp()
+    with _SPY5_LOCK:
+        if now - _SPY5["t"] < PINE_TTL:
+            return _SPY5["dots"]
+        _SPY5["t"] = now
+    start = (ny - timedelta(days=PINE_DAYS)).strftime("%Y-%m-%d") + " 09:30"
+    js, err = _get("/markets/timesales", {"symbol": "SPY", "interval": "5min", "start": start,
+                                          "end": ny.strftime("%Y-%m-%d %H:%M"),
+                                          "session_filter": "open"})
+    if err or not isinstance(js, dict):
+        _SPY5["err"] = str(err or "رد غير متوقع")[:120]
+        return _SPY5["dots"]
+    bars = []
+    for b in _listify(js.get("series"), "data"):
+        if not isinstance(b, dict):
+            continue
+        t = str(b.get("time") or "")
+        d, hm = t[:10], t[11:16]
+        o, h, l, c, v = (_f(b.get(k)) for k in ("open", "high", "low", "close", "volume"))
+        if len(d) != 10 or len(hm) != 5 or min(o, h, l, c) <= 0:
+            continue
+        mn = int(hm[:2]) * 60 + int(hm[3:])
+        if not (9 * 60 + 30 <= mn < 16 * 60):
+            continue                                       # RTH فقط (كـ TradingView)
+        if d == ny.strftime("%Y-%m-%d") and mn + 5 > ny.hour * 60 + ny.minute:
+            continue                                       # الشمعة الجارية ليست مغلقة
+        bars.append({"d": d, "hm": hm, "o": o, "h": h, "l": l, "c": c, "v": v})
+    bars.sort(key=lambda x: (x["d"], x["hm"]))
+    fp = (len(bars), bars[-1]["d"] + bars[-1]["hm"]) if bars else None
+    if fp != _SPY5["fp"]:
+        ev = pine_eval(bars)
+        days = sorted({b["d"] for b in bars})[-2:]         # اليوم والجلسة السابقة على الشارت
+        dots = [[b["d"], b["hm"], "C" if e[2] else "P", e[0], e[1]]
+                for b, e in zip(bars, ev) if b["d"] in days and (e[2] or e[3])]
+        with _SPY5_LOCK:
+            _SPY5.update({"bars": bars[-200:], "dots": dots, "fp": fp, "err": None})
+    return _SPY5["dots"]
+
+
+def _spy5_vol(day=None):
+    """حجم SPY لكل شمعة 5 د (اليوم والجلسة السابقة) من الشموع المخزّنة."""
+    return [[b["d"], b["hm"], int(b["v"])] for b in (_SPY5.get("bars") or [])[-160:]]
+
+
+def board_tick(tf=5, since=""):
+    """[v3.2] تحديث اللوحة كل 2 ث: شموع الفاصل المختار (الجديدة فقط بعد since) + الحي من Render.
+       صفر نداء Tradier إضافي ما عدا شموع SPY 5 د (≤ 1/د) وتخزين VWAP القائم (30 ث)."""
+    tf = tf if tf in (1, 5, 15) else 5
+    since = since if (isinstance(since, str) and _HM_RE.fullmatch(since or "")) else ""
+    b = board("bars")
+    lv = board("live")
+    out = {"ok": bool(b.get("ok")), "ver": VERSION, "tf": tf, "full": not since}
+    if not b.get("ok"):
+        out["err"] = b.get("err")
+    B = b.get("bars") or {}
+    rows = B.get("m" + str(tf)) or []
+    if since:
+        rows = [r for r in rows if isinstance(r, list) and r and str(r[0]) >= since]
+    out.update({"day": B.get("day"), "bars": rows})
+    m1 = B.get("m1") or []
+    if m1:
+        out["price"] = m1[-1][4]
+        out["open"] = m1[0][1]
+        out["price_t"] = m1[-1][0]
+    if not since:
+        P = B.get("prev") or {}
+        out["prev"] = {"day": P.get("day"), "bars": P.get("m" + str(tf)) or []}
+    vw = (B.get("vwap") or {}).get("series") or []
+    if since:
+        cut = since
+        vw = [x for x in vw if str(x[0]) >= cut]
+    out["vwap"] = vw
+    try:
+        if tf == 1:
+            vol = _VWAP.get("vol") or []
+            out["vol"] = [[B.get("day"), x[0], x[1]] for x in vol
+                          if not since or x[0] >= since]
+            _spy5_refresh() if tf == 5 else None
+        else:
+            _spy5_refresh()
+            out["vol"] = _spy5_vol()
+        out["pine"] = _spy5_refresh() if tf == 5 else []
+    except Exception as e:
+        out["pine_err"] = f"{type(e).__name__}: {e}"[:120]
+    if lv.get("ok"):
+        out["live"] = {k: lv.get(k) for k in ("bot4", "gd_pending", "rpm", "link", "agg_age",
+                                             "sh_today", "m_skip", "srv_t")}
+    else:
+        out["live_err"] = lv.get("err")
+    out["td_min"] = calls_per_min()
+    return out
 
 
 TWELVE_KEY = os.getenv("TWELVEDATA_API_KEY", "").strip()
@@ -1634,7 +1878,13 @@ def as_td_csv(k: str = "", symbol: str = "SPY", interval: str = "5min",
 
 
 @app.get("/board")
-def as_board(part: str = "all", g: str = "", s: str = ""):
+def as_board(part: str = "all", g: str = "", s: str = "", tf: int = 5, since: str = ""):
+    if part == "tick":                                       # [v3.2]
+        try:
+            return JSONResponse(board_tick(tf, since), headers={"Cache-Control": "no-store"})
+        except Exception as e:
+            return JSONResponse({"ok": False, "err": f"{type(e).__name__}: {e}"[:160]},
+                                headers={"Cache-Control": "no-store"})
     return JSONResponse(board(part, g, s), headers={"Cache-Control": "no-store"})
 
 
@@ -1672,7 +1922,7 @@ def _page(u, n, r):
     u = "SPX"                                   # [v3.0] حُذف تبويب SPY — الصفحة SPX دائماً
     other = "SPY"
     n = max(3, min(n or LIQ_STRIKES, 30))
-    r = max(5, min(r or 8, 15))             # [v2.8] /json كل 8 ث افتراضياً (5–15) — المسيطرون كل 2 ث
+    r = max(5, min(r or 15, 15))            # [v3.2] /json كل 15 ث افتراضياً — السعر والشارت كل 2 ث من Render
     picks = "".join(
         f'<a class="np{" on" if x == n else ""}" href="/?u={u}&n={x}&r={r}">{x}</a>'
         for x in (5, 8, 10, 12, 15, 20, 30))
@@ -1682,20 +1932,20 @@ def _page(u, n, r):
 
 
 @app.get("/", response_class=HTMLResponse)
-def dash(u: str = "SPY", n: int = 0, r: int = 8):
+def dash(u: str = "SPY", n: int = 0, r: int = 15):
     return _page(u, n, r)
 
 
 # مسار احتياطي: بعض إعدادات فيرسل تمرّر المسار الكامل للدالة.
 # يلتقط أي مسار غير معروف ويوجّهه بحسب نهايته — يجب أن يبقى الأخير.
 @app.get("/{full_path:path}", response_class=HTMLResponse)
-def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 8,
+def catch_all(full_path: str, u: str = "SPY", n: int = 0, r: int = 15,
               opt: str = "", und: str = "SPX", start: str = "",
               k: str = "", symbol: str = "SPY", interval: str = "5min", end: str = "",
-              part: str = "all", g: str = "", s: str = ""):
+              part: str = "all", g: str = "", s: str = "", tf: int = 5, since: str = ""):
     p = "/" + (full_path or "").strip("/")
     if p.endswith("/board"):                                    # [v3.0]
-        return JSONResponse(board(part, g, s), headers={"Cache-Control": "no-store"})
+        return as_board(part, g, s, tf, since)                  # [v3.2] يشمل part=tick
     if p.endswith("/td.csv"):                                  # [v2.9]
         return _td_resp(k, symbol, interval, start, end)
     if p.endswith("/bars"):                                   # [v2.3]
@@ -2053,6 +2303,28 @@ details.adv[open]>summary{color:var(--tx)}
 @media (min-width:760px){body{max-width:720px;margin:0 auto;padding-left:18px;padding-right:18px}
  .agb{height:30px;font-size:13px}.agv{font-size:14.5px}.lr{font-size:12px;padding:6px 4px}}
 @media (min-width:1200px){body{max-width:780px}}
+/* [v3.2] الرأس 4 أسطر · الشارت الجديد · ملء الشاشة */
+.px .l1{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.px .l2,.px .l3,.px .l4{display:block;font-size:11px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.px .l3 .vix,.px .l3 .conc{display:inline;margin:0}
+.px .l3 .conc:before{content:" · ";color:var(--dim)}
+.px .l4{color:var(--dim);font-weight:600}
+.px .l4 b{font-weight:800;font-size:11px!important;display:inline!important;line-height:inherit!important;letter-spacing:0!important;margin:0!important}
+.chleg{font-size:10px;line-height:1.4;color:#c6d3e6;direction:ltr;text-align:left;white-space:normal;
+ padding:2px 2px 4px;min-height:28px}
+#chI{display:flex;flex-wrap:wrap;gap:5px}
+#chI button{padding:4px 8px;font-size:11px;line-height:1.2;white-space:nowrap}
+.chleg::-webkit-scrollbar{display:none}
+.chleg b{color:#EAF2FF;font-weight:700}.chleg i{font-style:normal;color:#EAF2FF}.chleg s{text-decoration:none;margin-inline-start:6px}
+.chmain{height:250px;width:100%;direction:ltr;touch-action:none}
+.chsub{height:64px;width:100%;direction:ltr;border-top:1px solid rgba(255,255,255,.06);touch-action:none}
+.chc.full{position:fixed;inset:0;z-index:50;margin:0;border-radius:0;background:var(--bg);
+ padding:calc(env(safe-area-inset-top,0px) + 6px) 8px calc(env(safe-area-inset-bottom,0px) + 6px);display:flex;flex-direction:column}
+.chc.full .chmain{flex:1;height:auto}
+.chc.full .chsub{height:90px}
+body.chfull{overflow:hidden}
+#chB button.on,#chI button.on{opacity:1}
+#chI button:not(.on){opacity:.45}
 </style></head><body>
 
 <div class="hd">
@@ -2060,11 +2332,11 @@ details.adv[open]>summary{color:var(--tx)}
   <button class="tab on" id="tbMain" type="button">SPX</button>
   <button class="tab" id="tbPf" type="button">محفظة بوت السيولة</button>
  </div>
- <div class="px"><b id="spot">—</b>
-  <span class="chg" id="chg"></span>
-  <div class="sub"><span id="ses" class="bdg">…</span> <span id="ts">…</span></div>
-  <span class="vix" id="vix"></span>
-  <span class="conc" id="conc"></span></div>
+ <div class="px">
+  <div class="l1"><b id="spot">—</b><span class="chg" id="chg"></span></div>
+  <div class="l2 sub"><span id="ts">…</span> <span id="ses" class="bdg">…</span></div>
+  <div class="l3"><span class="vix" id="vix"></span><span class="conc" id="conc"></span></div>
+  <div class="l4" id="gam"></div></div>
 </div>
 
 <div id="vMain">
@@ -2072,10 +2344,12 @@ details.adv[open]>summary{color:var(--tx)}
  <div class="chh"><b>SPX</b><span id="chInfo">جارٍ جلب الشموع…</span>
   <div class="chb" id="chB"><button type="button" data-iv="1">1د</button><button type="button" data-iv="5">5د</button><button type="button" data-iv="15">15د</button></div></div>
  <div class="cht">
-  <div class="chi" id="chI"><button type="button" data-ind="e9"><i style="background:#FBBF24"></i>EMA 9</button><button type="button" data-ind="e20"><i style="background:#A78BFA"></i>EMA 20</button><button type="button" data-ind="vw"><i style="background:#38BDF8"></i>VWAP</button></div>
-  <div class="chz" id="chZ"><button type="button" data-z="out" aria-label="تصغير">−</button><button type="button" data-z="in" aria-label="تكبير">+</button><button type="button" data-z="reset" aria-label="إعادة">↺</button><button type="button" data-z="big" aria-label="ملء">⤢</button></div>
+  <div class="chi" id="chI"><button type="button" data-ind="e9"><i style="background:#FBBF24"></i>EMA 9</button><button type="button" data-ind="e20"><i style="background:#A78BFA"></i>EMA 20</button><button type="button" data-ind="vw"><i style="background:#60A5FA"></i>VWAP</button><button type="button" data-ind="vol"><i style="background:#8EA3C2"></i>الحجم</button><button type="button" data-ind="dom"><i style="background:#4a90ff"></i>المسيطرون</button><button type="button" data-ind="pine"><i style="background:#00C853"></i>الإشارة</button></div>
+  <div class="chz" id="chZ"><button type="button" data-z="reset" aria-label="آخر الشموع">↺</button><button type="button" data-z="big" aria-label="ملء الشاشة">⤢</button></div>
  </div>
- <div class="chw" id="chW"><svg id="chv" viewBox="0 0 360 210" preserveAspectRatio="none"></svg><div class="chtip" id="chTip"></div></div>
+ <div class="chleg" id="chLeg"></div>
+ <div class="chmain" id="chMain"></div>
+ <div class="chsub" id="chSub"></div>
  <div class="chf" id="chFoot"></div>
 </div>
 <div class="rng" id="rng" style="display:none">
@@ -2088,12 +2362,12 @@ details.adv[open]>summary{color:var(--tx)}
 <div class="now" id="now" style="display:none">
  <div class="nhd"><b>القرار</b><span id="nts"></span></div>
  <div class="vd" id="vd">
-  <div class="lbh"><b>بوت السيولة · SPX</b><span class="lbst" id="lbSt">…</span></div>
+  <div class="lbh"><b>بوت السيولة الجديد · الاندفاع</b><span class="lbst" id="lbSt">…</span></div>
   <div id="lbNew"></div>
   <div class="lbc" id="lbC">جارٍ القراءة…</div>
   <button class="lbbtn" id="lbBtn" type="button">القرارات ▾</button>
   <div class="lblist hide" id="lbList"></div>
-  <div class="vg">قياس فقط · لا تنفيذ · غير مختبَر</div>
+  <div class="vg">ورقي في G4 · الحي يتبع MOM_ENABLED</div>
   <div class="lbcl" id="lbCalls"></div>
  </div>
  <div class="ts"><div class="nlb"><span>المسيطرون · اليوم</span><span id="tsn" style="font-size:9.5px">مقياس ثابت 20–80%</span></div>
@@ -2157,10 +2431,6 @@ details.adv[open]>summary{color:var(--tx)}
  <div class="st"><u>بوت</u><b id="pv" style="color:var(--dn)">—</b></div>
 </div>
 
-<div class="walls">
- <div class="wrow up" id="wup"><span class="wtag" style="color:var(--up)">▲ OI</span></div>
- <div class="wrow dn" id="wdn"><span class="wtag" style="color:var(--dn)">▼ OI</span></div>
-</div>
 
 <div class="pos" id="pos" style="display:none">
  <div class="phd"><span>التموضع — ما سيُجبَر المتعاملون على فعله</span>
@@ -2215,6 +2485,7 @@ details.adv[open]>summary{color:var(--tx)}
  <div class="pfnote">الربح = منتصف الدخول × 100 × (Bid الخروج ÷ Ask الدخول − 1) × العقود · البوت الفعلي = خروجه الحي · الظلال = قاعدة خروجها المعتمدة محسوبة من مسار العقد · G1/G2 محسوبتان بالقواعد الحالية (الوقف بلمسة).</div>
 </div></div>
 
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 const U="__U__",N=__N__,R=__R__;
 // ⚠ المفتاح يحمل اسم الأداة ⇒ تاريخ SPX منفصل تماماً عن SPY.
@@ -2331,6 +2602,7 @@ const SES={open:["var(--up)","rgba(45,212,160,.16)"],
            post:["var(--ac)","rgba(74,144,255,.16)"],
            closed:["#8c96ab","rgba(255,255,255,.09)"]};
 function walls(el,list,col,tag){
+ if(!el)return;                                    // [v3.2] مربّع OI حُذف من اللوحة
  const head=`<span class="wtag" style="color:${col}">${tag}</span>`;
  if(!list||!list.length){el.innerHTML=head+`<span class="witem" style="opacity:.5">—</span>`;return;}
  el.innerHTML=head+list.map(w=>{
@@ -2740,29 +3012,30 @@ function lbRow(x){
   +`<span style="color:var(--dim)">SPX ${tg} · أقصى ${pts(x.mfe)} · أسوأ ${pts(x.mae)}${x.whi!=null?` · العقد خلال 60 د: ${pct(x.whi/x.c0-1)} / ${pct(x.wlo/x.c0-1)}`:""}${x.end==="open"?" · يُقاس":""}</span></span>`;
 }
 function lbPaint(d,live){
+ // [v3.2] بوت السيولة الجديد = الاندفاع (G4) · البوت القديم لا يظهر هنا (مرجع في المحفظة)
  const D=lbData(), St=document.getElementById("lbSt"), C=document.getElementById("lbC");
  const Nw=document.getElementById("lbNew"), Bt=document.getElementById("lbBtn"), Ls=document.getElementById("lbList");
  const Cl=document.getElementById("lbCalls");
  if(!St)return;
- const vc=d&&d.calls_min!=null?d.calls_min:null;
- if(!D){St.textContent=lbDown()?"الخادم لا يستجيب":"جارٍ الاتصال…";C.textContent=lbDown()?"لا ردّ من الخادم منذ دقيقة — تحقّق من /health":"جارٍ جلب حالة البوت من الخادم…";Nw.innerHTML="";Bt.style.display="none";Ls.classList.add("hide");
-  Cl.textContent=vc!=null?`نداءات Tradier/د · اللوحة ${vc}`:"";return;}
- if(!D.lb_on){St.textContent="موقوف";C.textContent="LB_ENABLED=0 على الخادم";Nw.innerHTML="";Bt.style.display="none";return;}
- const r=D.lb_rules||{}, T=D.lb_trades||[], c=D.lb_cond;
- const opn=T.filter(x=>x.state==="open"), done=T.filter(x=>x.state!=="open");
+ const L=CH.live&&Date.now()-CH.at<15000?CH.live:null;
+ if(!L&&!D){St.textContent=lbDown()?"الخادم لا يستجيب":"جارٍ الاتصال…";C.textContent=lbDown()?"لا ردّ من الخادم منذ دقيقة — تحقّق من /health":"جارٍ جلب حالة البوت من الخادم…";Nw.innerHTML="";Bt.style.display="none";Ls.classList.add("hide");Cl.textContent="";return;}
+ const b4=(L&&L.bot4)||[], opn=b4.filter(c=>c.state==="open"), today=(L&&L.sh_today&&L.sh_today.M)||0;
+ const sk=(L&&L.m_skip)||[], lk=(L&&L.link)||{};
  St.textContent=opn.length?`${opn.length} مفتوحة`:(live?"يراقب":"خارج الجلسة");
- C.innerHTML=live?lbCond(c,r):(T.length?`انتهت الجلسة · ${T.length} صفقة اليوم`:"خارج الجلسة · يعمل 09:45–15:00 NY");
- Nw.innerHTML=qBotCards(D,live);                    // [v3.0] صف المحفظة ≤60 د · القرارات خلف الزر
+ const lw=lk.mom_enabled?`<span style="color:#4ADE80">الحي مفعّل</span>`:`<span style="color:#FBBF24">الحي معطّل (MOM_ENABLED=0)</span>`;
+ const lr=lk.last_rej?` · آخر رفض ${hm5(lk.last_rej.t)}: ${qEsc(lk.last_rej.why||"")}`:"";
+ C.innerHTML=live?`الاندفاع: SPX ±10 خلال 5 د + خط الدقيقة ≥60/≤40 + مساحة ≥30 · حتى ${qEsc((lk.window||{}).last_entry_ny||"15:00")} NY · مركزان كحد أقصى · السلّم الثاني<br>اليوم <b>${today}</b> صفقة · <b>${sk.length}</b> إشارة تُخطّيت · ${lw}${lr}`
+  :(today?`انتهت الجلسة · ${today} صفقة اليوم`:"خارج الجلسة · يعمل 09:45–15:00 NY");
+ Nw.innerHTML=qBotCards(D,live);
  Bt.style.display="";
- Bt.textContent=`القرارات (${T.length}${opn.length?` · ${opn.length} مفتوحة`:""}) ${LBOPEN?"▴":"▾"}`;
+ Bt.textContent=`الإشارات المتخطّاة (${sk.length}) ${LBOPEN?"▴":"▾"}`;
  if(LBOPEN){
-  let h="";
-  if(opn.length)h+=`<div class="lbsec">المفتوحة</div>`+opn.slice().reverse().map(x=>lbCard(x,r)).join("");
-  if(done.length)h+=`<div class="lbsec">المغلقة</div>`+done.slice().reverse().map(lbRow).join("");
-  if(!h)h=`<div class="lbsec">لا قرارات اليوم بعد</div>`;
-  Ls.innerHTML=h; Ls.classList.remove("hide");
+  Ls.innerHTML=sk.length?sk.slice().reverse().map(x=>`<div class="lbsec">${hm5(x.t)} · ${x.side} · ${qEsc(x.why)}</div>`).join(""):`<div class="lbsec">لا إشارات متخطّاة اليوم</div>`;
+  Ls.classList.remove("hide");
  }else{Ls.classList.add("hide");}
- Cl.textContent=`نداءات Tradier/د · الخادم (السيولة) ${D.calls_min??"—"}${vc!=null?` · اللوحة ${vc}`:""} · الحدّ 120 (لا يشمل بوت الخمس دقائق ومشروعك الآخر)`;
+ const r=L&&L.rpm;
+ Cl.innerHTML=r?`نداءات Tradier/د · مفتاح البيانات <b>${r.prod_total}</b>/120 (السيولة ${r.liq} · القياس ${r.measure} · اللوحة ${(r.vercel_liq||0)+(r.index||0)}) · مفتاح الحي <b>${r.live_md}</b>/120 · أوامر ${r.live_orders}/60 · الدورة ${r.cad} ث`
+  :(D?`نداءات Tradier/د · الخادم (السيولة) ${D.calls_min??"—"}`:"");
 }
 document.addEventListener("click",e=>{ if(e.target&&e.target.id==="lbBtn"){LBOPEN=!LBOPEN;try{localStorage.setItem(LBK,LBOPEN?"1":"0");}catch(x){}
  try{lbPaint(LAST_D,LAST_D&&LAST_D.session==="open");}catch(x){} } });
@@ -3054,6 +3327,10 @@ async function load(){
    if(U==="SPX"&&live&&sd)vtx+=(vtx?" · ":"")+"المتبقي ±"+sd.v.toFixed(1);}catch(e){}
   document.getElementById("vix").textContent=vtx;
   document.getElementById("ts").textContent=d.ny_time+" نيويورك";
+  try{const P0=d.pos||{},gm=document.getElementById("gam");               // [v3.2] السطر الرابع
+   if(gm){if(P0.gex==null){gm.textContent="";}else{const ng=P0.gex<0;
+    const fl=qOk(P0.flip)?` · الانقلاب <b>${Number(P0.flip).toFixed(0)}</b>${qOk(P0.flip_dist)?` <bdi dir="ltr">(${P0.flip_dist>0?"+":""}${Number(P0.flip_dist).toFixed(0)})</bdi>`:(qOk(d.spot)?` <bdi dir="ltr">(${(d.spot-P0.flip)>0?"+":""}${(d.spot-P0.flip).toFixed(0)})</bdi>`:"")}`:"";
+    gm.innerHTML=`غاما <b style="color:${ng?"var(--dn)":"var(--up)"}">${ng?"سالبة · الحركة تمتدّ":"موجبة · الحركة تُبتلع"}</b>${fl}`;}}}catch(e){}
   const sb=document.getElementById("ses"),sc=SES[d.session]||SES.closed;
   sb.textContent=d.session_txt;sb.style.color=sc[0];sb.style.background=sc[1];
   pace(d.session);
@@ -3178,18 +3455,24 @@ function qDM(d){d=String(d||"");return d.length>=10?`${+d.slice(8,10)}/${+d.slic
 function qCol(v){return !qOk(v)?QM:(Number(v)>0?QG:(Number(v)<0?QR:QM));}
 function qEsc(t){return String(t==null?"":t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 const QREASON={SL:"وقف",Trail:"متحرك",TP:"هدف +50%",Time:"انتهاء الوقت",TimeClose:"إغلاق 15:45",
- SPXbreak:"كسر SPX",Ladder:"السلّم",End:"نهاية النافذة",NoQuote:"بلا سعر",NoClose:"لم تُغلق",NoPrice:"بلا سعر"};
+ SPXbreak:"كسر SPX",Ladder:"السلّم",Lad:"السلّم",End:"نهاية النافذة",NoQuote:"بلا سعر",NoClose:"لم تُغلق",NoPrice:"بلا سعر"};
 function qReason(r){r=String(r||"");if(!r)return "—";if(/^SL/.test(r))return "وقف";if(/^Trail/.test(r))return "متحرك";return QREASON[r]||r;}
 const QHEAD=`<div class="qhd"><span>العقد<i>الاستراتيجية · الوقت</i></span><span>القيمة السوقية<i>الكمية</i></span><span>آخر Bid<i>م. التكلفة</i></span><span>إجمالي الربح<i>الربح %</i></span></div>`;
 function qRow(c){
  const sc=c.side==="CALL"?"var(--up)":"var(--dn)";
  const open=c.state==="open";
  const win=qOk(c.pnl_usd)&&c.pnl_usd>=0;
- const tag=open?(c.armed?`<span class="qtag" style="background:rgba(74,222,128,.16);color:#4ADE80">مُسلَّحة</span>`:`<span class="qtag" style="background:rgba(74,144,255,.18);color:#8ab6ff">مفتوحة</span>`)
+ const arm=(c.rule==="lad2"||c.rule==="lad1")?c.armed2:c.armed;
+ const tag=open?(arm?`<span class="qtag" style="background:rgba(74,222,128,.16);color:#4ADE80">مُسلَّحة</span>`:`<span class="qtag" style="background:rgba(74,144,255,.18);color:#8ab6ff">مفتوحة</span>`)
   :`<span class="qtag" style="background:${win?"rgba(74,222,128,.16)":"rgba(248,113,113,.16)"};color:${win?"#4ADE80":"#F87171"}">مغلقة · ${qEsc(qReason(c.reason))} ${hm5(c.exit_t)}</span>`;
  const lc=x=>!qOk(x)?"#8EA3C2":(x>0?"#4ADE80":(x<0?"#F87171":"#8EA3C2"));
  const sub=[];
- if(c.rule==="live"){
+ if(c.rule==="lad2"||c.rule==="lad1"){                       // [v3.2] السلّم
+  sub.push(`الآن <b>${qPc(c.now_pct_mid,0)}</b> بالمنتصف`);
+  sub.push(`وقف السلّم <b>${qPc(c.lad_stop_pct,0)}</b> ($${qF(c.sl_px)})`);
+  sub.push(c.armed2?`<span style="color:#4ADE80">مُسلَّحة ✓ (الوقف ≥ الدخول)</span>`:`غير مُسلَّحة`);
+  sub.push(`أقرب درجة <b>${qPc(c.lad_next_pct,0)}</b>`);
+ }else if(c.rule==="live"){
   sub.push(c.armed?`التسليح ✓ عند <b>$${qF(c.arm_px)}</b>`:`التسليح عند <b>$${qF(c.arm_px)}</b> (+30%)`);
   sub.push(`الوقف الآن <b>$${qF(c.stop_px)}</b> ${c.stop_kind==="Trail"?"(متحرك −25% من الذروة)":"(−40%)"}`);
  }else{
@@ -3200,9 +3483,13 @@ function qRow(c){
   if(qOk(c.spx_stop))sub.push(`كسر SPX عند <b>${qF(c.spx_stop,1)}</b>`);
  }
  sub.push(`الذروة <b>$${qF(c.peak)}</b> (${qPc(c.peak_pct,0)})`);
- if(open)sub.push(`المتبقي <b>${qF(c.left_min,0)} د</b> من ${c.rule==="tp50"?30:60}`);
+ if(open)sub.push(`المنقضي <b>${qF(c.elapsed_min,0)} د</b> · المتبقي <b>${qF(c.left_min,0)} د</b> من ${c.rule==="tp50"||c.rule==="tp30"?30:60}`);
+ if(c.spy){const y=c.spy,lv=c.live||y.live||{};
+  const LST={sent:"أُرسل للحي",sending:"قيد الإرسال",ambig:"ردّ غامض",err:"خطأ إرسال",rej:"رفضه الحي",nospy:"لا عقد SPY",off:"الربط مقفل",noexec:"التنفيذ غير محمّل"};
+  sub.push(`SPY <b>${qF(y.k,0)}</b> دخول <b>$${qF(y.ca0)}</b> الآن <b>$${qF(y.bid)}</b> <span style="color:${qCol(y.pnl_pct)}">${qPc(y.pnl_pct,0)}</span> · وقف <b>${qPc(y.lad_stop_pct,0)}</b>`);
+  sub.push(`الحي: ${qEsc(LST[lv.st]||lv.st||"—")}${lv.why?` — ${qEsc(lv.why)}`:""}${lv.exit?` · الخروج: ${qEsc(lv.exit)}`:""}`);}
  if(c.skip)sub.push(`<span style="color:#FCA5A5">رأس المال لا يكفي ⇒ تُتخطّى في المحفظة</span>`);
- return `<div class="qrow"><div class="qc q1"><b>${qF(c.k,0)} <span style="color:${sc}">${c.side}</span></b><s>${qEsc(c.src==="BOT"?"البوت":(c.src==="A"?"نسخة البوت":c.name))} · ${hm5(c.t)}</s></div>`
+ return `<div class="qrow"><div class="qc q1"><b>${qF(c.k,0)} <span style="color:${sc}">${c.side}</span></b><s>${qEsc(c.src==="BOT"?"البوت القديم":(c.src==="A"?"نسخة البوت":(c.src==="M"?"الاندفاع":c.name)))} · ${hm5(c.t)}</s></div>`
   +`<div class="qc"><b>${qUsd(c.mkt)}</b><s>${c.qty} عقد</s></div>`
   +`<div class="qc"><b>${qF(c.bid)}</b><s>${qF(c.c0)}</s></div>`
   +`<div class="qc"><b style="color:${lc(c.pnl_usd)}">${qUsd(c.pnl_usd,1)}</b><s style="color:${lc(c.pnl_pct)}">${qPc(c.pnl_pct)}</s></div></div>`
@@ -3210,151 +3497,179 @@ function qRow(c){
 }
 function qBox(cards){return cards.length?`<div class="qbox">${QHEAD}${cards.map(qRow).join("")}</div>`:"";}
 function qBotCards(D,live){
- const cs=(D&&D.lb_cards||[]).filter(c=>qOk(c.elapsed_min)&&c.elapsed_min<60);  // بعد 60 د ⇒ المحفظة
+ // [v3.2] بوت السيولة الجديد (الاندفاع) فقط — من /board?part=tick كل 2 ث (وإلا من /liq_agg)
+ const L=CH.live, fresh=L&&Date.now()-CH.at<15000;
+ let cs=fresh?(L.bot4||[]):((D&&D.sh_cards)||[]).filter(c=>c.src==="M");
+ cs=cs.filter(c=>qOk(c.elapsed_min)&&c.elapsed_min<60);
  if(cs.length)return qBox(cs);
- return live?`<div class="qempty">لا صفقة للبوت خلال آخر 60 دقيقة</div>`:"";
+ return live?`<div class="qempty">لا صفقة لبوت السيولة الجديد خلال آخر 60 دقيقة</div>`:"";
 }
 
-/* ── الشارت [v3.1]: EMA 9/20 · منحنى VWAP · تكبير وتصغير وسحب بالأصابع · خط تقاطع بالقيم ──
-   الشموع: اليوم من liq (Render) + الجلسة السابقة من Tradier (Vercel) للإحماء وما قبل الافتتاح.
-   EMA تُحسب على كل الشموع (السابقة + اليوم) ⇒ قريبة من TradingView منذ أول شمعة.
-   VWAP: منحنى SPY دقيقة بدقيقة × نسبة SPX/SPY الحالية (نفس تحويل رقم VWAP في اللوحة). */
-const CHK="liq_ch_iv", CHS="liq_ch_set";
-const CH={iv:1,d:null,at:0,busy:false,fail:0,err:null,t:null,n:null,off:0,cross:null,big:false,
-          ind:{e9:true,e20:true,vw:true},rows:[],e9:[],e20:[],vw:[],vis:null};
+/* ══ [v3.2] الشارت: TradingView Lightweight Charts 4.2 ══
+   الشموع: اليوم من liq (Render) + الجلسة السابقة (Vercel) · كل 2 ث الجديد فقط (since).
+   الوقت = بداية الشمعة بتوقيت نيويورك (كـ TradingView) · EMA على كل الشموع (السابقة + اليوم).
+   VWAP: منحنى SPY دقيقة بدقيقة × نسبة SPX/SPY · حجم SPY · نقاط Pine على 5 د فقط. */
+const CHK="liq_ch_iv", CHS="liq_ch_set3";
+const CH={iv:5,at:0,busy:false,fail:0,err:null,t:null,big:false,
+  ind:{e9:true,e20:true,vw:true,vol:false,dom:true,pine:true},
+  day:null,today:new Map(),prev:[],prevDay:null,vwm:new Map(),vol:new Map(),pine:[],
+  rows:[],e9:[],e20:[],vw:[],ch:null,sub:null,s:{},ro:null,live:null,price:null,open:null,ptime:null,fitDone:false};
 try{const v=+localStorage.getItem(CHK);if(v===1||v===5||v===15)CH.iv=v;
- const o=JSON.parse(localStorage.getItem(CHS)||"{}");if(o.ind)Object.assign(CH.ind,o.ind);CH.big=!!o.big;}catch(e){}
-function chSave(){try{localStorage.setItem(CHK,String(CH.iv));localStorage.setItem(CHS,JSON.stringify({ind:CH.ind,big:CH.big}));}catch(e){}}
-function chCap(){return CH.iv===1?90:(CH.iv===5?78:26);}
+ const o=JSON.parse(localStorage.getItem(CHS)||"{}");if(o.ind)Object.assign(CH.ind,o.ind);}catch(e){}
+function chSave(){try{localStorage.setItem(CHK,String(CH.iv));localStorage.setItem(CHS,JSON.stringify({ind:CH.ind}));}catch(e){}}
 function chStop(){clearTimeout(CH.t);CH.t=null;}
-function chPoll(){
- chStop(); if(document.hidden||VIEW!=="main")return;
- if(CH.busy){CH.t=setTimeout(chPoll,1000);return;}
- CH.busy=true;
- const c=new AbortController(),to=setTimeout(()=>c.abort(),9000);
- fetch("/board?part=bars",{signal:c.signal,cache:"no-store"})
-  .then(r=>{if(!r.ok)throw {k:"HTTP "+r.status};return r.json();})
-  .then(j=>{if(!(j&&j.ok&&j.bars))throw {k:(j&&j.err)||"رد غير صالح"};CH.d=j.bars;CH.at=Date.now();CH.fail=0;CH.err=null;})
-  .catch(e=>{CH.fail++;CH.err=(e&&e.k)||((e&&e.name==="AbortError")?"مهلة":"شبكة");})
-  .finally(()=>{clearTimeout(to);CH.busy=false;try{chDraw();}catch(e){console.log("chart",e);}
-   if(document.hidden||VIEW!=="main")return;
-   const live=!LAST_D||LAST_D.session==="open";
-   CH.t=setTimeout(chPoll,live?10000:60000);});
-}
 function chMin(t){const p=String(t||"").split(":");return p.length>=2?(+p[0])*60+(+p[1]):null;}
+function chT(day,hm){const a=String(day||"").split("-").map(Number),b=String(hm||"").split(":").map(Number);
+ if(a.length<3||b.length<2||!isFinite(a[0])||!isFinite(b[0]))return null;return Date.UTC(a[0],a[1]-1,a[2],b[0],b[1])/1000;}
+function chHM(t){const d=new Date(t*1000);return String(d.getUTCHours()).padStart(2,"0")+":"+String(d.getUTCMinutes()).padStart(2,"0");}
+function chDM(t){const d=new Date(t*1000);return d.getUTCDate()+"/"+(d.getUTCMonth()+1);}
 /* EMA بنفس تعريف TradingView: أول قيمة = متوسط أول N إغلاقات ثم k = 2/(N+1) */
 function chEma(cl,N){const out=new Array(cl.length).fill(null);if(cl.length<N)return out;
  let s=0;for(let i=0;i<N;i++)s+=cl[i];let e=s/N;out[N-1]=e;const k=2/(N+1);
  for(let i=N;i<cl.length;i++){e=cl[i]*k+e*(1-k);out[i]=e;}return out;}
-function chBuild(){
- const D=CH.d||{}, key="m"+CH.iv, ok=b=>b&&b.length>=5&&[1,2,3,4].every(i=>qOk(b[i]));
- const today=(D[key]||[]).filter(ok).map(b=>({t:b[0],d:D.day||"",o:+b[1],h:+b[2],l:+b[3],c:+b[4],lv:!!b[5],p:0}));
- const P=D.prev, prev=(P&&P.day&&P.day!==D.day&&P[key]?P[key]:[]).filter(ok)
-   .map(b=>({t:b[0],d:P.day,o:+b[1],h:+b[2],l:+b[3],c:+b[4],lv:false,p:1}));
- const rows=prev.concat(today), cl=rows.map(r=>r.c);
- CH.rows=rows; CH.e9=chEma(cl,9); CH.e20=chEma(cl,20);
- // VWAP: دقيقة SPY ⇒ أقرب دقيقة ≤ نهاية الشمعة داخلها · × النسبة الحالية
- const ser=(D.vwap&&D.vwap.series)||[], ratio=LAST_D&&LAST_D.vwap&&qOk(LAST_D.vwap.ratio)?+LAST_D.vwap.ratio:null;
- CH.ratio=ratio;
- const vm=new Map(); for(const x of ser){const m=chMin(x[0]);if(m!=null&&qOk(x[1]))vm.set(m,+x[1]);}
- const ks=[...vm.keys()].sort((a,b)=>a-b);
- CH.vw=rows.map(r=>{if(r.p||!ratio||!ks.length)return null;const st=chMin(r.t),en=st+CH.iv-1;
-  let best=null;for(let i=ks.length-1;i>=0;i--){if(ks[i]<=en){if(ks[i]>=st-(CH.iv===1?0:CH.iv))best=ks[i];break;}}
-  return best==null?null:vm.get(best)*ratio;});
+function chReset(){CH.today=new Map();CH.prev=[];CH.prevDay=null;CH.vwm=new Map();CH.vol=new Map();CH.pine=[];CH.day=null;CH.fitDone=false;}
+function chMerge(j){
+ if(j.full||(CH.day&&j.day&&j.day!==CH.day)){CH.today=new Map();CH.vwm=new Map();}   // تحميل كامل أو يوم جديد
+ CH.day=j.day||CH.day;
+ const ok=b=>Array.isArray(b)&&b.length>=5&&[1,2,3,4].every(i=>qOk(b[i]));
+ for(const b of (j.bars||[])){if(!ok(b))continue;const t=chT(CH.day,b[0]);if(t!=null)CH.today.set(t,{t,o:+b[1],h:+b[2],l:+b[3],c:+b[4],lv:!!b[5],p:0});}
+ if(j.full&&j.prev){CH.prevDay=j.prev.day;CH.prev=(j.prev.bars||[]).filter(ok).map(b=>({t:chT(j.prev.day,b[0]),o:+b[1],h:+b[2],l:+b[3],c:+b[4],lv:false,p:1})).filter(r=>r.t!=null&&j.prev.day!==CH.day);}
+ for(const x of (j.vwap||[])){const m=chMin(x[0]);if(m!=null&&qOk(x[1]))CH.vwm.set(m,+x[1]);}
+ if(Array.isArray(j.vol)){if(j.full||CH.iv!==1)CH.vol=new Map();
+  for(const x of j.vol){const t=chT(x[0],x[1]);if(t!=null)CH.vol.set(t,+x[2]);}}
+ if(Array.isArray(j.pine))CH.pine=j.pine;
+ if(qOk(j.price)){CH.price=+j.price;CH.ptime=j.price_t;}
+ if(qOk(j.open))CH.open=+j.open;
+ if(j.live)CH.live=j.live;
 }
-function chWin(){
- const N=CH.rows.length,cap=chCap();
- let n=CH.n==null?cap:CH.n; n=Math.max(Math.min(10,N),Math.min(n,N));
- let off=Math.max(0,Math.min(CH.off,N-n)); CH.off=off;
- return {a:N-off-n,b:N-off,n:n,N:N};
+function chBuild(){
+ const rows=CH.prev.concat([...CH.today.values()].sort((a,b)=>a.t-b.t));
+ CH.rows=rows;const cl=rows.map(r=>r.c);CH.e9=chEma(cl,9);CH.e20=chEma(cl,20);
+ const ratio=LAST_D&&LAST_D.vwap&&qOk(LAST_D.vwap.ratio)?+LAST_D.vwap.ratio:null;CH.ratio=ratio;
+ const ks=[...CH.vwm.keys()].sort((a,b)=>a-b);
+ CH.vw=rows.map(r=>{if(r.p||!ratio||!ks.length)return null;const st=chMin(chHM(r.t)),en=st+CH.iv-1;
+  let best=null;for(let i=ks.length-1;i>=0;i--){if(ks[i]<=en){if(ks[i]>=st-(CH.iv===1?0:CH.iv))best=ks[i];break;}}
+  return best==null?null:CH.vwm.get(best)*ratio;});
+}
+function chVolAt(r){
+ if(CH.iv===1||CH.iv===5)return CH.vol.get(r.t);
+ let s=0,n=0;for(let k=0;k<3;k++){const v=CH.vol.get(r.t+k*300);if(v!=null){s+=v;n++;}}return n?s:undefined;
+}
+function chDomAt(r){
+ const D=(typeof srvAgg==="function")?srvAgg():null;const ser=D&&D.series;if(!ser||r.p)return null;
+ if(!CH.domMap||CH.domMap.src!==ser){CH.domMap=new Map(ser.map(x=>[+x[0],+x[1]]));CH.domMap.src=ser;}
+ const st=chMin(chHM(r.t)),en=st+CH.iv-1;for(let m=en;m>=st;m--){const v=CH.domMap.get(m);if(v!=null)return v;}return null;
+}
+const CH_UP="#2dd4a0",CH_DN="#ff5c72";
+function chEnsure(){
+ if(CH.ch)return true;
+ const L=window.LightweightCharts, el=document.getElementById("chMain"), es=document.getElementById("chSub");
+ if(!L||!el||!es)return false;
+ const base={layout:{background:{type:"solid",color:"transparent"},textColor:"#8EA3C2",fontSize:10,fontFamily:"-apple-system,system-ui,sans-serif"},
+  grid:{vertLines:{color:"rgba(255,255,255,.035)"},horzLines:{color:"rgba(255,255,255,.05)"}},
+  rightPriceScale:{borderVisible:false,scaleMargins:{top:.08,bottom:.08}},
+  timeScale:{borderVisible:false,timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:7,minBarSpacing:1.5,
+   tickMarkFormatter:(t,tp)=>tp<=2?chDM(t):chHM(t)},
+  localization:{locale:"en-US",timeFormatter:t=>chDM(t)+" "+chHM(t)},
+  crosshair:{mode:0,vertLine:{color:"rgba(142,163,194,.55)",labelBackgroundColor:"#212b3c"},horzLine:{color:"rgba(142,163,194,.45)",labelBackgroundColor:"#212b3c"}},
+  handleScroll:{mouseWheel:true,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:false},
+  handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true}};
+ CH.ch=L.createChart(el,Object.assign({},base,{width:el.clientWidth,height:el.clientHeight}));
+ CH.s.c=CH.ch.addCandlestickSeries({upColor:CH_UP,downColor:CH_DN,borderVisible:false,wickUpColor:CH_UP,wickDownColor:CH_DN,priceLineVisible:true,priceLineWidth:1});
+ const ln=c=>({color:c,lineWidth:1.5,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+ CH.s.e9=CH.ch.addLineSeries(ln("#FBBF24"));CH.s.e20=CH.ch.addLineSeries(ln("#A78BFA"));CH.s.vw=CH.ch.addLineSeries(ln("#60A5FA"));
+ CH.s.vol=CH.ch.addHistogramSeries({priceScaleId:"vol",priceFormat:{type:"volume"},lastValueVisible:false,priceLineVisible:false});
+ CH.ch.priceScale("vol").applyOptions({scaleMargins:{top:.82,bottom:0},visible:false});
+ CH.sub=L.createChart(es,Object.assign({},base,{width:es.clientWidth,height:es.clientHeight,
+  timeScale:Object.assign({},base.timeScale,{visible:false}),rightPriceScale:{borderVisible:false,scaleMargins:{top:.1,bottom:.1}},
+  handleScroll:false,handleScale:false}));
+ CH.s.dom=CH.sub.addLineSeries({color:"#4a90ff",lineWidth:1.5,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,
+  autoscaleInfoProvider:()=>({priceRange:{minValue:20,maxValue:80}})});
+ CH.s.dom.createPriceLine({price:55,color:"rgba(45,212,160,.5)",lineWidth:1,lineStyle:2,axisLabelVisible:false});
+ CH.s.dom.createPriceLine({price:45,color:"rgba(255,92,114,.5)",lineWidth:1,lineStyle:2,axisLabelVisible:false});
+ CH.ch.timeScale().subscribeVisibleLogicalRangeChange(r=>{if(r&&CH.sub)try{CH.sub.timeScale().setVisibleLogicalRange(r);}catch(e){}});
+ CH.ch.subscribeCrosshairMove(p=>chLegend(p));
+ const rs=()=>{try{CH.ch.applyOptions({width:el.clientWidth,height:el.clientHeight});CH.sub.applyOptions({width:es.clientWidth,height:es.clientHeight});}catch(e){}};
+ if(window.ResizeObserver){CH.ro=new ResizeObserver(rs);CH.ro.observe(el);CH.ro.observe(es);}else window.addEventListener("resize",rs);
+ return true;
+}
+function chLegend(p){
+ const lg=document.getElementById("chLeg");if(!lg)return;
+ let i=CH.rows.length-1;
+ if(p&&p.time!=null){const k=CH.rows.findIndex(r=>r.t===p.time);if(k>=0)i=k;}
+ const r=CH.rows[i];if(!r){lg.innerHTML="";return;}
+ const pc=r.o?((r.c-r.o)/r.o*100):0, col=r.c>=r.o?CH_UP:CH_DN, f=v=>qOk(v)?Number(v).toFixed(2):"—";
+ let h=`<b>${chDM(r.t)} ${chHM(r.t)}</b> O <i>${f(r.o)}</i> H <i>${f(r.h)}</i> L <i>${f(r.l)}</i> C <i style="color:${col}">${f(r.c)}</i> <i style="color:${col}">(${pc>=0?"+":""}${pc.toFixed(2)}%)</i>`;
+ if(CH.ind.e9)h+=` <s style="color:#FBBF24">E9 ${f(CH.e9[i])}</s>`;
+ if(CH.ind.e20)h+=` <s style="color:#A78BFA">E20 ${f(CH.e20[i])}</s>`;
+ if(CH.ind.vw)h+=` <s style="color:#60A5FA">VWAP ${f(CH.vw[i])}</s>`;
+ if(CH.ind.vol){const v=chVolAt(r);if(v!=null)h+=` <s style="color:#8EA3C2">Vol ${K(v)}</s>`;}
+ if(CH.ind.dom){const d=chDomAt(r);if(d!=null)h+=` <s style="color:#4a90ff">مسيطرون ${(+d).toFixed(0)}%</s>`;}
+ lg.innerHTML=h;
 }
 function chDraw(){
- const sv=document.getElementById("chv"),inf=document.getElementById("chInfo"),ft=document.getElementById("chFoot"),tip=document.getElementById("chTip");
- if(!sv)return;
- document.getElementById("chc").classList.toggle("big",CH.big);
+ const inf=document.getElementById("chInfo");
+ chBuild();
+ if(!chEnsure()){if(inf)inf.textContent=window.LightweightCharts?"…":"تعذّر تحميل مكتبة الشارت (شبكة)";return;}
+ const R=CH.rows;
+ CH.s.c.setData(R.map(r=>({time:r.t,open:r.o,high:r.h,low:r.l,close:r.c})));
+ const ln=(arr,on)=>on?R.map((r,i)=>arr[i]==null?{time:r.t}:{time:r.t,value:+arr[i]}):[];
+ CH.s.e9.setData(ln(CH.e9,CH.ind.e9));CH.s.e20.setData(ln(CH.e20,CH.ind.e20));CH.s.vw.setData(ln(CH.vw,CH.ind.vw));
+ CH.s.vol.setData(CH.ind.vol?R.map(r=>{const v=chVolAt(r);return v==null?{time:r.t}:{time:r.t,value:v,color:r.c>=r.o?"rgba(45,212,160,.35)":"rgba(255,92,114,.35)"};}):[]);
+ const mk=[];
+ if(CH.iv===5&&CH.ind.pine){const have=new Set(R.map(r=>r.t));
+  for(const x of CH.pine){const t=chT(x[0],x[1]);if(t!=null&&have.has(t))mk.push({time:t,position:"aboveBar",shape:"circle",size:.7,
+   color:x[2]==="C"?"#00C853":"#D50000"});}}
+ mk.sort((a,b)=>a.time-b.time);CH.s.c.setMarkers(mk);
+ const sub=document.getElementById("chSub");if(sub)sub.style.display=CH.ind.dom?"":"none";
+ CH.s.dom.setData(CH.ind.dom?R.map(r=>{const d=chDomAt(r);return d==null?{time:r.t}:{time:r.t,value:+d};}):[]);
+ if(!CH.fitDone&&R.length){CH.fitDone=true;const n=R.length,w=CH.iv===1?120:(CH.iv===5?78:40);
+  try{CH.ch.timeScale().setVisibleLogicalRange({from:Math.max(0,n-w),to:n+8});}catch(e){}}
+ chLegend(null);
+ const tdy=[...CH.today.values()];
+ if(inf)inf.textContent=CH.err?`⚠ ${CH.err}`:`${CH.iv} د · ${tdy.length} شمعة اليوم${CH.prev.length?" + السابقة":""}${CH.iv===5&&CH.ind.pine?` · إشارات ${mk.length}`:""}`;
  document.querySelectorAll("#chB button").forEach(b=>b.classList.toggle("on",+b.dataset.iv===CH.iv));
  document.querySelectorAll("#chI button").forEach(b=>b.classList.toggle("on",!!CH.ind[b.dataset.ind]));
- chBuild();
- if(!CH.rows.length){sv.innerHTML="";ft.innerHTML="";tip.classList.remove("on");CH.vis=null;
-  inf.textContent=CH.err?`تعذّر جلب الشموع: ${CH.err}`:(CH.d?"لا شموع بعد (تبدأ 09:30 NY)":"جارٍ جلب الشموع…");return;}
- const w=chWin(), R=CH.rows.slice(w.a,w.b);
- const W=Math.max(240,Math.round(sv.clientWidth||360)), H=Math.max(150,Math.round(sv.clientHeight||210));
- sv.setAttribute("viewBox",`0 0 ${W} ${H}`);
- const PT=12,PB=8,PR=46,cw=(W-PR)/R.length;
- let hi=-Infinity,lo=Infinity;
- R.forEach((r,i)=>{hi=Math.max(hi,r.h);lo=Math.min(lo,r.l);
-  for(const [on,arr] of [[CH.ind.e9,CH.e9],[CH.ind.e20,CH.e20],[CH.ind.vw,CH.vw]]){const v=arr[w.a+i];
-   if(on&&v!=null&&v<r.h+(r.h-r.l)*6+5&&v>r.l-(r.h-r.l)*6-5){hi=Math.max(hi,v);lo=Math.min(lo,v);}}});
- if(hi-lo<1){hi+=0.5;lo-=0.5;} const pad=(hi-lo)*0.04; hi+=pad; lo-=pad;
- const y=v=>PT+(hi-v)/(hi-lo)*(H-PT-PB), X=i=>i*cw+cw/2;
- let g="";
- for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=y(v);
-  g+=`<line x1="0" x2="${W-PR}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="#1c2535" stroke-width="1"/>`
-   +`<text x="${W-PR+4}" y="${(yy+3).toFixed(1)}" font-size="10" fill="#7f8da5">${v.toFixed(0)}</text>`;}
- R.forEach((r,i)=>{if(i>0&&r.d!==R[i-1].d){const x=(i*cw).toFixed(1);
-  g+=`<line x1="${x}" x2="${x}" y1="${PT}" y2="${H-PB}" stroke="#4a5a75" stroke-dasharray="3 3"/><text x="${(+x+3).toFixed(1)}" y="${PT+9}" font-size="9" fill="#7f8da5">${qDM(r.d)}</text>`;}});
- R.forEach((r,i)=>{const x=X(i),up=r.c>=r.o,col=up?"#2dd4a0":"#ff5c72",op=r.lv?' opacity=".55"':(r.p?' opacity=".7"':"");
-  const bw=Math.max(1,cw*0.66),yt=y(Math.max(r.o,r.c)),yb=y(Math.min(r.o,r.c));
-  g+=`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${y(r.h).toFixed(1)}" y2="${y(r.l).toFixed(1)}" stroke="${col}" stroke-width="1"${op}/>`
-   +`<rect class="cnd" x="${(x-bw/2).toFixed(1)}" y="${yt.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,yb-yt).toFixed(1)}" fill="${col}"${op}/>`;});
- const line=(arr,col,wd,da)=>{let d="",pen=false;R.forEach((r,i)=>{const v=arr[w.a+i];
-   if(v==null||!isFinite(v)){pen=false;return;}d+=(pen?"L":"M")+X(i).toFixed(1)+" "+y(v).toFixed(1)+" ";pen=true;});
-   return d?`<path class="ind" d="${d}" fill="none" stroke="${col}" stroke-width="${wd}"${da?` stroke-dasharray="${da}"`:""} stroke-linejoin="round"/>`:"";};
- if(CH.ind.vw)g+=line(CH.vw,"#38BDF8",1.6,"");
- if(CH.ind.e20)g+=line(CH.e20,"#A78BFA",1.4,"");
- if(CH.ind.e9)g+=line(CH.e9,"#FBBF24",1.4,"");
- const L=R[R.length-1],yl=y(L.c);
- g+=`<line x1="0" x2="${W-PR}" y1="${yl.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="#e9eef6" stroke-width=".6" stroke-dasharray="2 3" opacity=".55"/>`
-  +`<rect x="${W-PR+1}" y="${(yl-8).toFixed(1)}" width="${PR-2}" height="15" rx="3" fill="#e9eef6"/><text x="${W-PR+4}" y="${(yl+3.5).toFixed(1)}" font-size="10" font-weight="700" fill="#0a0d13">${L.c.toFixed(1)}</text>`;
- // خط التقاطع
- let tipH="";
- if(CH.cross!=null&&CH.cross>=w.a&&CH.cross<w.b){const i=CH.cross-w.a,r=R[i],x=X(i).toFixed(1);
-  g+=`<line x1="${x}" x2="${x}" y1="${PT}" y2="${H-PB}" stroke="#cbd5e1" stroke-width=".7" stroke-dasharray="3 2"/>`
-   +`<line x1="0" x2="${W-PR}" y1="${y(r.c).toFixed(1)}" y2="${y(r.c).toFixed(1)}" stroke="#cbd5e1" stroke-width=".7" stroke-dasharray="3 2"/>`;
-  const f=v=>v==null?"—":v.toFixed(2), chg=r.o?((r.c/r.o-1)*100):null;
-  tipH=`<b>${qDM(r.d)} ${r.t}${r.p?" · سابقة":""}${r.lv?" · جارية":""}</b><br><span>O</span> ${f(r.o)} <span>H</span> ${f(r.h)}<br><span>L</span> ${f(r.l)} <span>C</span> <b style="color:${r.c>=r.o?"#2dd4a0":"#ff5c72"}">${f(r.c)}</b> ${chg==null?"":`(${chg>=0?"+":""}${chg.toFixed(2)}%)`}`
-   +(CH.ind.e9?`<br><span style="color:#FBBF24">EMA9</span> ${f(CH.e9[CH.cross])}`:"")+(CH.ind.e20?`<br><span style="color:#A78BFA">EMA20</span> ${f(CH.e20[CH.cross])}`:"")
-   +(CH.ind.vw?`<br><span style="color:#38BDF8">VWAP</span> ${f(CH.vw[CH.cross])}`:"");
-  tip.style.left=(X(i)/W>0.5?"6px":"auto");tip.style.right=(X(i)/W>0.5?"auto":"6px");
- }else CH.cross=null;
- tip.innerHTML=tipH; tip.classList.toggle("on",!!tipH);
- sv.innerHTML=g; CH.vis={a:w.a,b:w.b,cw:cw,W:W,PR:PR};
- const age=CH.at?Math.round((Date.now()-CH.at)/1000):null;
- const lv=x=>x==null?"—":x.toFixed(1), last=CH.rows.length-1;
- inf.textContent=`${CH.iv} د · ${R.length}${w.N>R.length?"/"+w.N:""} شمعة${CH.off?" · ◀ سابق":""} · EMA9 ${lv(CH.e9[last])} · EMA20 ${lv(CH.e20[last])} · VWAP ${lv(CH.vw[last])}${CH.err?` · ⚠ ${CH.err}`:(age!=null&&age>30?` · عمرها ${age} ث`:"")}`;
- ft.innerHTML=`<span>${R[0].t}</span><span>${R[Math.floor(R.length/2)].t}</span><span>${L.t} NY</span>`;
+ const ft=document.getElementById("chFoot");
+ if(ft)ft.textContent=CH.iv===5&&CH.ind.pine?"• أخضر = إشارة كول · • أحمر = إشارة بوت (مؤشر SPY 5M على شموع SPY · قد يختلف حجم TradingView)":"";
 }
-/* اللمس والفأرة: سحب = تمرير · قرصة/عجلة/أزرار = تكبير وتصغير · نقرة = خط التقاطع */
-const CP={pts:new Map(),x0:0,off0:0,n0:0,d0:0,moved:false,cx0:0};
-function chIdx(clientX){const sv=document.getElementById("chv"),v=CH.vis;if(!v)return null;
- const rc=sv.getBoundingClientRect(),x=(clientX-rc.left)/rc.width*v.W;if(x>v.W-v.PR)return null;
- return Math.max(v.a,Math.min(v.b-1,v.a+Math.floor(x/v.cw)));}
-function chZoom(f){const w=chWin();const N=w.N;CH.n=Math.round(Math.max(Math.min(10,N),Math.min(N,w.n*f)));chDraw();}
-(function(){const sv=document.getElementById("chv");if(!sv)return;
- sv.addEventListener("pointerdown",e=>{CP.pts.set(e.pointerId,e.clientX);try{sv.setPointerCapture(e.pointerId);}catch(x){}
-  const w=chWin();CP.off0=CH.off;CP.n0=w.n;CP.moved=false;CP.cx0=e.clientX;
-  if(CP.pts.size===2){const a=[...CP.pts.values()];CP.d0=Math.abs(a[0]-a[1])||1;CP.moved=true;}
-  else CP.x0=e.clientX;});
- sv.addEventListener("pointermove",e=>{if(!CP.pts.has(e.pointerId))return;CP.pts.set(e.pointerId,e.clientX);
-  const v=CH.vis;if(!v)return;const rc=sv.getBoundingClientRect();
-  if(CP.pts.size>=2){const a=[...CP.pts.values()],d=Math.abs(a[0]-a[1])||1;
-   const N=CH.rows.length;CH.n=Math.round(Math.max(Math.min(10,N),Math.min(N,CP.n0*CP.d0/d)));chDraw();return;}
-  const dx=e.clientX-CP.x0;if(Math.abs(dx)>6)CP.moved=true;if(!CP.moved)return;
-  const bars=dx/rc.width*v.W/v.cw;CH.off=Math.round(CP.off0+bars);CH.cross=null;chDraw();});
- const up=e=>{const wasTap=!CP.moved&&CP.pts.size===1;CP.pts.delete(e.pointerId);
-  if(wasTap){const i=chIdx(e.clientX);CH.cross=(i==null||CH.cross===i)?null:i;chDraw();}
-  if(CP.pts.size===1){CP.x0=[...CP.pts.values()][0];CP.off0=CH.off;}};
- sv.addEventListener("pointerup",up);sv.addEventListener("pointercancel",e=>{CP.pts.delete(e.pointerId);});
- sv.addEventListener("wheel",e=>{e.preventDefault();chZoom(e.deltaY>0?1.2:1/1.2);},{passive:false});
-})();
+function chHead(){
+ // السعر كل 2 ث من Render (آخر قراءة للجامع) — أثناء الجلسة فقط
+ if(!qOk(CH.price)||!LAST_D||LAST_D.session!=="open")return;
+ const sp=document.getElementById("spot");if(sp)sp.textContent=Number(CH.price).toFixed(2);
+}
+function chPoll(){
+ chStop(); if(document.hidden)return;
+ if(CH.busy){CH.t=setTimeout(chPoll,1000);return;}
+ CH.busy=true;
+ const full=!CH.today.size, last=full?"":chHM(Math.max(...CH.today.keys()));
+ const c=new AbortController(),to=setTimeout(()=>c.abort(),6000);
+ fetch(`/board?part=tick&tf=${CH.iv}${full?"":"&since="+last}`,{signal:c.signal,cache:"no-store"})
+  .then(r=>{if(!r.ok)throw {k:"HTTP "+r.status};return r.json();})
+  .then(j=>{if(!(j&&j.ok))throw {k:(j&&j.err)||"رد غير صالح"};if(j.tf!==CH.iv)return;chMerge(j);CH.at=Date.now();CH.fail=0;CH.err=null;})
+  .catch(e=>{CH.fail++;CH.err=(e&&e.k)||((e&&e.name==="AbortError")?"مهلة":"شبكة");})
+  .finally(()=>{clearTimeout(to);CH.busy=false;
+   try{if(VIEW==="main")chDraw();}catch(e){console.log("chart",e);}
+   try{chHead();}catch(e){}
+   try{if(LAST_D)lbPaint(LAST_D,LAST_D.session==="open");}catch(e){}
+   try{if(VIEW==="pf")pfLive();}catch(e){}
+   if(document.hidden)return;
+   const live=!LAST_D||LAST_D.session==="open";
+   CH.t=setTimeout(chPoll,live?2000:30000);});
+}
+function chBig(on){
+ CH.big=on;document.getElementById("chc").classList.toggle("full",on);document.body.classList.toggle("chfull",on);
+ setTimeout(()=>{try{const el=document.getElementById("chMain"),es=document.getElementById("chSub");
+  CH.ch.applyOptions({width:el.clientWidth,height:el.clientHeight});CH.sub.applyOptions({width:es.clientWidth,height:es.clientHeight});}catch(e){}},60);
+}
 document.addEventListener("click",e=>{const t=e.target&&e.target.closest&&e.target;if(!t)return;
- const b=t.closest("#chB button");if(b){CH.iv=+b.dataset.iv;CH.n=null;CH.off=0;CH.cross=null;chSave();chDraw();return;}
+ const b=t.closest("#chB button");if(b){const v=+b.dataset.iv;if(v!==CH.iv){CH.iv=v;chSave();chReset();chDraw();chPoll();}return;}
  const ib=t.closest("#chI button");if(ib){const k=ib.dataset.ind;CH.ind[k]=!CH.ind[k];chSave();chDraw();return;}
  const z=t.closest("#chZ button");if(z){const k=z.dataset.z;
-  if(k==="in")chZoom(1/1.5);else if(k==="out")chZoom(1.5);
-  else if(k==="reset"){CH.n=null;CH.off=0;CH.cross=null;chDraw();}
-  else if(k==="big"){CH.big=!CH.big;chSave();chDraw();}}});
-window.addEventListener("resize",()=>{try{chDraw();}catch(e){}});
+  if(k==="reset"){CH.fitDone=false;chDraw();try{CH.ch.timeScale().scrollToRealTime();}catch(x){}}
+  else if(k==="big")chBig(!CH.big);}});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&CH.big)chBig(false);});
+
 
 /* ── العرض: SPX أو المحفظة ── */
 const VK="liq_view";
@@ -3371,8 +3686,9 @@ function setView(v){
 }
 function viewPolls(){
  if(document.hidden)return;
- if(VIEW==="main"){pfStop();chPoll();}
- else{chStop();pfPoll();try{pfLive();}catch(e){}}
+ chPoll();                                         // [v3.2] كل 2 ث في الصفحتين (البطاقات والعدّاد)
+ if(VIEW==="main"){pfStop();setTimeout(()=>{try{chBig(CH.big);chDraw();}catch(e){}},30);}
+ else{pfPoll();try{pfLive();}catch(e){}}
 }
 document.addEventListener("click",e=>{const id=e.target&&e.target.id;
  if(id==="tbMain")setView("main");else if(id==="tbPf")setView("pf");});
@@ -3381,7 +3697,8 @@ document.addEventListener("click",e=>{const id=e.target&&e.target.id;
 const PFK="liq_pf_sel";
 const PF={g:null,s:null,bot:null,sh:null,at:0,busy:false,err:null,t:null,sum:null,meta:null};
 try{const o=JSON.parse(localStorage.getItem(PFK)||"{}");PF.g=o.g||null;PF.s=o.s||null;}catch(e){}
-const SH_ORDER=["A","T","M","E","R","F","G","RND","W"];
+const SH_ORDER=["MS","R","T","GD","RND","BOT","A","M","E","F","G","W"];
+function pfHero(g){return (g&&+String(g).slice(1)>=4)?"M":"BOT";}        // [v3.2] G4+ ⇒ بوت السيولة الجديد
 function pfStop(){clearTimeout(PF.t);PF.t=null;}
 function pfSave(){try{localStorage.setItem(PFK,JSON.stringify({g:PF.g,s:PF.s}));}catch(e){}}
 function pfGet(g,s){
@@ -3395,8 +3712,8 @@ function pfPoll(){
  pfStop(); if(document.hidden||VIEW!=="pf")return;
  if(PF.busy){PF.t=setTimeout(pfPoll,1000);return;}
  PF.busy=true;
- const g0=PF.g||"G3", s0=PF.s||"T";
- pfGet(g0,"BOT").then(b=>{
+ const g0=PF.g||"G4", s0=PF.s||"R";
+ pfGet(g0,pfHero(g0)).then(b=>{
    PF.meta=b;PF.sum=b.summary||null;
    const gs=(b.groups||[]).map(x=>x[0]);
    if(!PF.g||gs.indexOf(PF.g)<0)PF.g=(b.group_now&&gs.indexOf(b.group_now)>=0)?b.group_now:(gs[gs.length-1]||"G3");
@@ -3405,7 +3722,7 @@ function pfPoll(){
    if(!PF.s||srcs.indexOf(PF.s)<0)PF.s=srcs[0]||null;
    pfSave();
    const jobs=[];
-   if(PF.bot===null)jobs.push(pfGet(PF.g,"BOT").then(x=>{PF.bot=x.trades||[];}));
+   if(PF.bot===null)jobs.push(pfGet(PF.g,pfHero(PF.g)).then(x=>{PF.bot=x.trades||[];}));
    if(PF.s)jobs.push(pfGet(PF.g,PF.s).then(x=>{PF.sh={g:PF.g,s:PF.s,rows:x.trades||[]};}));
    return Promise.all(jobs);})
   .then(()=>{PF.at=Date.now();PF.err=null;})
@@ -3416,7 +3733,8 @@ function pfPoll(){
 }
 function pfStrats(){
  const g=PF.sum&&PF.sum[PF.g]; if(!g)return [];
- const ks=Object.keys(g).filter(k=>k!=="BOT"&&k[0]!=="_");
+ const hero=pfHero(PF.g);
+ const ks=Object.keys(g).filter(k=>k!==hero&&k[0]!=="_");
  return ks.sort((a,b)=>(SH_ORDER.indexOf(a)+99*(SH_ORDER.indexOf(a)<0))-(SH_ORDER.indexOf(b)+99*(SH_ORDER.indexOf(b)<0)));
 }
 function pfKpi(k){
@@ -3428,6 +3746,9 @@ function pfKpi(k){
   +it("متوسط الصفقة",qPc(k.avg_pct,1),qCol(k.avg_pct),`بحذف الأفضل ${qPc(k.avg_ex_best,1)}`)
   +it("أفضل / أسوأ",`${qPc(k.best_pct,0)}`,QG,`أسوأ ${qPc(k.worst_pct,0)}`)
   +it("أقصى تراجع",qOk(k.max_dd_pct)?`−${qF(k.max_dd_pct,1)}%`:"—",k.max_dd_pct>0?QR:null,"من قمة الرصيد")
+  +(function(){const g=PF.sum&&PF.sum[PF.g],rn=g&&g.RND;                 // [v3.2]
+    if(!rn||k===rn||!qOk(rn.avg_pct)||!qOk(k.avg_pct))return "";
+    const df=k.avg_pct-rn.avg_pct;return it("مقابل العشوائي",qPc(df,1),qCol(df),`العشوائي ${qPc(rn.avg_pct,1)} · ${rn.closed} صفقة`);})()
   +it("متخطّاة / بلا سعر",`${k.skip_cap} / ${k.unpriced}`,null,`${k.amb?`غامضة ${k.amb} · `:""}${k.nofeat?`بلا ميزات ${k.nofeat}`:"لرأس المال / للبيانات"}`)
   +`</div>`;
 }
@@ -3436,7 +3757,7 @@ function pfDW(k){
  const tb=(title,rows,lab)=>`<div class="pfscr" style="max-height:220px"><table class="pft2"><tr><th>${title}</th><th>صفقات</th><th>الربح</th></tr>`
   +(rows.length?rows.slice().reverse().map(r=>`<tr><td>${lab(r[0])}</td><td>${r[2]}</td><td class="n" style="color:${qCol(r[1])}">${qUsd(r[1],1)}</td></tr>`).join("")
    :`<tr><td colspan="3" style="color:#8EA3C2">—</td></tr>`)+`</table></div>`;
- return `<div class="pfdw">${tb("اليوم",k.daily||[],d=>qDM(d))}${tb("الأسبوع",k.weekly||[],d=>"من "+qDM(d))}</div>`;
+ return `<div class="pfdw">${tb("اليوم",k.daily||[],d=>qDM(d))}${tb("الأسبوع",k.weekly||[],d=>"من "+qDM(d))}${tb("الشهر",k.monthly||[],d=>String(d))}</div>`;
 }
 function pfTable(rows){
  if(!rows)return `<div class="qempty">جارٍ جلب الصفقات…</div>`;
@@ -3455,7 +3776,8 @@ function pfLive(){
  const bo=document.getElementById("pfBotOpen"),so=document.getElementById("pfShOpen");
  if(!bo)return;
  if(!D){bo.innerHTML="";so.innerHTML="";return;}
- const bc=(D.lb_cards||[]).filter(c=>c.state==="open");
+ const bc=pfHero(PF.g)==="M"?((CH.live&&CH.live.bot4)||(D.sh_cards||[]).filter(c=>c.src==="M")).filter(c=>c.state==="open")
+  :(D.lb_cards||[]).filter(c=>c.state==="open");
  bo.innerHTML=bc.length?qBox(bc):"";
  const sc=(D.sh_cards||[]).filter(c=>c.src===PF.s);
  so.innerHTML=sc.length?qBox(sc):`<div class="qempty">لا صفقة مفتوحة لهذه الاستراتيجية الآن</div>`;
@@ -3473,15 +3795,17 @@ function pfPaint(){
  if(!g){document.getElementById("pfBotK").innerHTML=PF.meta&&!PF.meta.ready?`<div class="qempty">الخادم يحسب الدفاتر لأول مرة (ثوانٍ)…</div>`:(PF.err?`<div class="pferr">تعذّر جلب المحفظة: ${qEsc(PF.err)}</div>`:`<div class="qempty">جارٍ التحميل…</div>`);
   document.getElementById("pfBotDW").innerHTML="";document.getElementById("pfBotT").innerHTML="";}
  else{
-  const kb=g.BOT;
-  document.getElementById("pfBotRule").textContent="خروجه الحي: وقف −40% بلمسة · تسليح +30% · متحرك −25% بقراءتين · 15:45";
+  const hero=pfHero(PF.g), kb=g[hero];
+  document.querySelector("#vPf .pfh2").firstChild.textContent=hero==="M"?"بوت السيولة الجديد · الاندفاع ":"البوت الفعلي ";
+  document.getElementById("pfBotRule").textContent=hero==="M"?"السلّم الثاني: −40% ثم 0 عند +50% ثم الدرجة −100 · 60 د · 15:45 · مساحة ≥30 · مركزان كحد أقصى"
+   :"خروجه الحي: وقف −40% بلمسة · تسليح +30% · متحرك −25% بقراءتين · 15:45";
   document.getElementById("pfBotK").innerHTML=pfKpi(kb);
   document.getElementById("pfBotDW").innerHTML=pfDW(kb);
   document.getElementById("pfBotT").innerHTML=pfTable(PF.bot);
  }
  const ss=pfStrats(),names=(PF.meta&&PF.meta.names)||{};
  document.getElementById("pfS").innerHTML=ss.length?ss.map(k=>{const v=g[k];
-   return `<button type="button" data-s="${qEsc(k)}" class="${k===PF.s?"on":""}">${qEsc(k==="A"?"نسخة البوت (ظل)":(names[k]||k))}<i style="color:${qCol(v&&v.pnl)}">${qOk(v&&v.ret_pct)?qPc(v.ret_pct,1):""}</i></button>`;}).join("")
+   return `<button type="button" data-s="${qEsc(k)}" class="${k===PF.s?"on":""}">${qEsc(k==="A"?"نسخة البوت (ظل)":(k==="BOT"?"البوت القديم (مرجع)":(names[k]||k)))}<i style="color:${qCol(v&&v.pnl)}">${qOk(v&&v.ret_pct)?qPc(v.ret_pct,1):""}</i></button>`;}).join("")
   :`<span class="qempty">لا ظلال في هذه المجموعة</span>`;
  const ks=g&&PF.s?g[PF.s]:null;
  document.getElementById("pfShRule").textContent=ks?`الخروج المعتمد: ${ks.rule_ar||ks.rule}`:"";
