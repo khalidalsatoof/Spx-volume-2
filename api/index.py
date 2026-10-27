@@ -1,8 +1,17 @@
-# -*- coding: utf-8 -*-
+ -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.2.1)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.3.0)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊿++ [v3.3.0] (26 أكتوبر · حادثة النداءات + طلب خالد)
+     ① حصّة Tradier: كانت نداءات طلبات liq (/json و/snap) تُعدّ ضمن «اللوحة» وliq يعدّها
+        مرة ثانية (vercel_liq) ⇒ المجموع المعروض أعلى من الحقيقي والحماية تبطّئ بلا داعٍ.
+        الآن: نداءات الصفحة وحدها + ما يزيد عن تقدير liq لطلباته (BOT_VERCEL_COST) ⇒ td دقيق.
+        /health يعرض التفصيل (calls_page · calls_bot · bot_req · td).
+     ② قراءات لا تُعاد عند الفشل مع كل طلب: VIX · VIX1D · الساعة · VWAP تنتظر مهلتها.
+     ③ سعر SPY لبوابة VWAP: من نسبة SPX/SPY المخزّنة (SPY_RATIO_CACHE_SEC) لا نداء كل /json.
+     ④ مناطق العرض والطلب على الشارت (1 · 5 · 15 د) بزر إظهار/إخفاء · المكسورة لا تُرسم ·
+        5 د = مناطق البوت نفسها من Render (lb_zones) · 1 و15 د = نفس القاعدة على شموعهما.
   ㊿+ [v3.2.1] (25 أكتوبر · ملاحظة خالد) نقطة الكول تحت الشمعة والبوت فوقها · شعار المكتبة
       داخل الشارت أُخفي (كان يغطّي الشموع وخط المسيطرين) والإسناد صار رابطاً نصياً أسفله.
   ㊿ [v3.2] (24 أكتوبر · القرارات 240 · 251 · 252 · يتطلب liq v3.7 على Render)
@@ -360,7 +369,7 @@
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 import math
@@ -379,7 +388,7 @@ except Exception:
     from datetime import timezone as _tz, timedelta as _td
     NY = _tz(_td(hours=-4))
 
-VERSION    = "3.2.1"
+VERSION    = "3.3.0"
 TD_BASE    = "https://api.tradier.com/v1"
 TD_TOKEN   = os.getenv("TRADIER_PROD_TOKEN", "").strip()
 TD_TIMEOUT = float(os.getenv("TD_TIMEOUT", "8"))
@@ -502,21 +511,55 @@ def _i(x, d=0):
         return d
 
 
-_CALLS = []                                     # [v2.5] طوابع نداءات Tradier
+_CALLS = []                                     # [v2.5] طوابع نداءات Tradier (الصفحة)
+_CALLS_BOT = []                                 # [v3.3] نداءات Tradier أثناء طلبات liq (/json · /snap)
+_BOT_REQ = []                                   # [v3.3] طلبات liq نفسها
+_CALLS_LOCK = threading.Lock()
+_ORIG = threading.local()                       # [v3.3] مصدر الطلب الجاري: page | bot
+BOT_VERCEL_COST = float(os.getenv("BOT_VERCEL_COST", "2"))   # = LIQ_VERCEL_COST في liq (تقديره لكل طلب)
+BOT_UA_PREFIX = os.getenv("BOT_UA_PREFIX", "spx-liq")        # هوية طلبات liq (User-Agent)
+
+
+def _n60(lst, now):
+    while lst and now - lst[0] > 60.0:
+        lst.pop(0)
+    return len(lst)
+
+
+def calls_split():
+    """[v3.3] نداءات آخر 60 ث في هذه النسخة: الصفحة · أثناء طلبات liq · عدد طلبات liq."""
+    now = datetime.now().timestamp()
+    with _CALLS_LOCK:
+        return _n60(_CALLS, now), _n60(_CALLS_BOT, now), _n60(_BOT_REQ, now)
 
 
 def calls_per_min():
-    """نداءات Tradier من هذه النسخة في آخر 60 ثانية (تقريبي: لكل نسخة Vercel دافئة)."""
-    now = datetime.now().timestamp()
-    while _CALLS and now - _CALLS[0] > 60.0:
-        _CALLS.pop(0)
-    return len(_CALLS)
+    """ما يُبلَّغ لـRender (td): نداءات الصفحة + ما يزيد عن تقدير liq لطلباته.
+       liq يحسب لكل طلب يرسله BOT_VERCEL_COST نداءً (vercel_liq) ⇒ لا يُعدّ مرتين."""
+    page, bot, req = calls_split()
+    return int(page + max(0.0, bot - BOT_VERCEL_COST * req))
+
+
+def _set_origin(request):
+    """[v3.3] يحدّد مصدر الطلب من User-Agent (liq يرسل spx-liq/…) ويسجّل طلب liq."""
+    ua = ""
+    try:
+        ua = (request.headers.get("user-agent") or "") if request is not None else ""
+    except Exception:
+        ua = ""
+    bot = ua.startswith(BOT_UA_PREFIX)
+    _ORIG.v = "bot" if bot else "page"
+    if bot:
+        with _CALLS_LOCK:
+            _BOT_REQ.append(datetime.now().timestamp())
+    return bot
 
 
 def _get(path, params):
     if not TD_TOKEN:
         return None, "TRADIER_PROD_TOKEN غير مضبوط"
-    _CALLS.append(datetime.now().timestamp())
+    with _CALLS_LOCK:
+        (_CALLS_BOT if getattr(_ORIG, "v", "page") == "bot" else _CALLS).append(datetime.now().timestamp())
     try:
         r = _http().get(f"{TD_BASE}{path}", params=params, timeout=TD_TIMEOUT,
                         headers={"Authorization": f"Bearer {TD_TOKEN}",
@@ -565,8 +608,11 @@ def _quote_last(sym, store):
     now = datetime.now().timestamp()
     if store["val"] is not None and (now - store["ts"]) < VIX_CACHE_SEC:
         return store["val"]
+    if (now - store.get("fts", 0.0)) < VIX_CACHE_SEC:      # [v3.3] فشل حديث ⇒ لا نداء قبل المهلة
+        return store["val"]
     js, err = _get("/markets/quotes", {"symbols": sym, "greeks": "false"})
     if err or not isinstance(js, dict):
+        store["fts"] = now
         return store["val"]
     for q in _listify(js.get("quotes"), "quote"):
         for k in ("last", "close", "prevclose"):
@@ -574,6 +620,7 @@ def _quote_last(sym, store):
             if v > 0:
                 store["ts"], store["val"] = now, round(v, 2)
                 return store["val"]
+    store["fts"] = now
     return store["val"]
 
 
@@ -608,12 +655,16 @@ def _market_clock():
     now = datetime.now().timestamp()
     if _CLOCK["val"] is not None and (now - _CLOCK["ts"]) < CLOCK_CACHE_SEC:
         return _CLOCK["val"]
+    if (now - _CLOCK.get("fts", 0.0)) < CLOCK_CACHE_SEC:   # [v3.3] فشل حديث ⇒ لا نداء قبل المهلة
+        return None
     js, err = _get("/markets/clock", {})
     st = None
     if not err and isinstance(js, dict) and isinstance(js.get("clock"), dict):
         st = str(js["clock"].get("state") or "").lower() or None
     if st:
         _CLOCK["ts"], _CLOCK["val"] = now, st
+    else:
+        _CLOCK["fts"] = now
     return st
 
 
@@ -692,12 +743,15 @@ def _spy_vwap():
     now = datetime.now().timestamp()
     if _VWAP["day"] == day and (now - _VWAP["ts"]) < VWAP_CACHE_SEC:
         return _VWAP["val"]
+    if (now - _VWAP.get("fts", 0.0)) < VWAP_CACHE_SEC:     # [v3.3] فشل حديث ⇒ لا نداء قبل المهلة
+        return _VWAP["val"] if _VWAP["day"] == day else None
     js, err = _get("/markets/timesales",
                    {"symbol": "SPY", "interval": "1min",
                     "start": f"{day} 09:30",
                     "end": ny.strftime("%Y-%m-%d %H:%M"),
                     "session_filter": "open"})
     if err or not isinstance(js, dict):
+        _VWAP["fts"] = now
         return _VWAP["val"] if _VWAP["day"] == day else None
     bars = _listify(js.get("series"), "data")
     vw, nb, nc = _vwap_calc(bars)
@@ -791,13 +845,36 @@ def _prev_bars():
     return val
 
 
+SPY_RATIO_CACHE_SEC = float(os.getenv("SPY_RATIO_CACHE_SEC", "60"))   # [v3.3] = مهلة VIX القائمة
+_SPYR = {"ts": 0.0, "ratio": None, "fts": 0.0}
+
+
+def _spy_from_ratio(spot):
+    """[v3.3] سعر SPY = سعر الأداة ÷ نسبة (الأداة/SPY) المخزّنة حتى SPY_RATIO_CACHE_SEC.
+       النسبة تتحرك ببطء شديد (≈ 0.01% في الدقيقة) ⇒ خطأ سعر SPY أقل من سنت ونداء واحد/د بدل 4."""
+    if not spot:
+        return None
+    now = datetime.now().timestamp()
+    r = _SPYR["ratio"]
+    if r and (now - _SPYR["ts"]) < SPY_RATIO_CACHE_SEC:
+        return spot / r
+    if (now - _SPYR["fts"]) < SPY_RATIO_CACHE_SEC:
+        return (spot / r) if r else None
+    spy = _spot("SPY")[0]
+    if spy and spy > 0:
+        _SPYR.update({"ts": now, "ratio": spot / spy})
+        return spy
+    _SPYR["fts"] = now
+    return (spot / r) if r else None
+
+
 def _vwap_block(underlying, spot):
     """[v1.9] بوابة الدخول: بُعد SPY عن VWAP ومقابله بنقاط الأداة المعروضة."""
     try:
         vv = _spy_vwap()
         if not vv:
             return None
-        spy = spot if underlying == "SPY" else _spot("SPY")[0]
+        spy = spot if underlying == "SPY" else _spy_from_ratio(spot)      # [v3.3]
         if not spy:
             return None
         ratio = (spot / spy) if underlying != "SPY" else 1.0
@@ -1436,7 +1513,9 @@ def health():
     return {"ok": True, "token": bool(TD_TOKEN), "version": VERSION, "board_key": bool(BOT_KEY),
             "pine": {"err": _SPY5.get("err"), "bars": len(_SPY5.get("bars") or []),
                      "dots": len(_SPY5.get("dots") or [])},              # [v3.2]
-            "calls_min": calls_per_min(),                  # [v2.5]
+            "calls_min": calls_per_min(),                  # [v2.5] = td المبلَّغ لـRender
+            "calls_split": dict(zip(("page", "bot", "bot_req"), calls_split())),   # [v3.3]
+            "bot_vercel_cost": BOT_VERCEL_COST, "spy_ratio_cache_sec": SPY_RATIO_CACHE_SEC,
             "clock": _market_clock(), "vwap_gate_spy": VWAP_GATE_SPY,  # [v1.9]
             "positioning": True, "greeks": True,
             "pos_in_snapshot": True,          # [v1.8.2]
@@ -1891,11 +1970,15 @@ def as_board(part: str = "all", g: str = "", s: str = "", tf: int = 5, since: st
 
 
 @app.get("/json")
-def as_json(u: str = "SPY", n: int = 0, exp: str = ""):
-    d = fetch(u, expiration=exp or None, n=n or None, force=True)
-    if isinstance(d, dict):
-        d = dict(d, calls_min=calls_per_min())             # [v2.5]
-    return JSONResponse(d)
+def as_json(request: Request, u: str = "SPY", n: int = 0, exp: str = ""):
+    _set_origin(request)                                   # [v3.3] page | bot
+    try:
+        d = fetch(u, expiration=exp or None, n=n or None, force=True)
+        if isinstance(d, dict):
+            d = dict(d, calls_min=calls_per_min())         # [v2.5]
+        return JSONResponse(d)
+    finally:
+        _ORIG.v = "page"
 
 
 @app.get("/debug")
@@ -1913,7 +1996,13 @@ def snap(u: str = "SPX", n: int = 30, key: str = "", tag: str = "",
        /snap?u=SPX&fmt=txt                  → نص عربي جاهز للنسخ
        /snap?u=SPX&key=2026-08-31_10:05_PUT_771&tag=executed
     """
-    row = snapshot_row(u, tag=tag, sig_key=key, n=max(5, min(n, 40)))
+    _ORIG.v = "bot"                                    # [v3.3] /snap لا يطلبه إلا liq
+    with _CALLS_LOCK:
+        _BOT_REQ.append(datetime.now().timestamp())
+    try:
+        row = snapshot_row(u, tag=tag, sig_key=key, n=max(5, min(n, 40)))
+    finally:
+        _ORIG.v = "page"
     if fmt == "txt":
         return HTMLResponse("<pre style='font:14px/1.7 monospace;direction:rtl'>"
                             + snap_text(row) + "</pre>")
@@ -2346,7 +2435,7 @@ body.chfull{overflow:hidden}
  <div class="chh"><b>SPX</b><span id="chInfo">جارٍ جلب الشموع…</span>
   <div class="chb" id="chB"><button type="button" data-iv="1">1د</button><button type="button" data-iv="5">5د</button><button type="button" data-iv="15">15د</button></div></div>
  <div class="cht">
-  <div class="chi" id="chI"><button type="button" data-ind="e9"><i style="background:#FBBF24"></i>EMA 9</button><button type="button" data-ind="e20"><i style="background:#A78BFA"></i>EMA 20</button><button type="button" data-ind="vw"><i style="background:#60A5FA"></i>VWAP</button><button type="button" data-ind="vol"><i style="background:#8EA3C2"></i>الحجم</button><button type="button" data-ind="dom"><i style="background:#4a90ff"></i>المسيطرون</button><button type="button" data-ind="pine"><i style="background:#00C853"></i>الإشارة</button></div>
+  <div class="chi" id="chI"><button type="button" data-ind="e9"><i style="background:#FBBF24"></i>EMA 9</button><button type="button" data-ind="e20"><i style="background:#A78BFA"></i>EMA 20</button><button type="button" data-ind="vw"><i style="background:#60A5FA"></i>VWAP</button><button type="button" data-ind="vol"><i style="background:#8EA3C2"></i>الحجم</button><button type="button" data-ind="dom"><i style="background:#4a90ff"></i>المسيطرون</button><button type="button" data-ind="pine"><i style="background:#00C853"></i>الإشارة</button><button type="button" data-ind="zn"><i style="background:linear-gradient(90deg,#2dd4a0 50%,#ff5c72 50%)"></i>المناطق</button></div>
   <div class="chz" id="chZ"><button type="button" data-z="reset" aria-label="آخر الشموع">↺</button><button type="button" data-z="big" aria-label="ملء الشاشة">⤢</button></div>
  </div>
  <div class="chleg" id="chLeg"></div>
@@ -3513,7 +3602,7 @@ function qBotCards(D,live){
    VWAP: منحنى SPY دقيقة بدقيقة × نسبة SPX/SPY · حجم SPY · نقاط Pine على 5 د فقط. */
 const CHK="liq_ch_iv", CHS="liq_ch_set3";
 const CH={iv:5,at:0,busy:false,fail:0,err:null,t:null,big:false,
-  ind:{e9:true,e20:true,vw:true,vol:false,dom:true,pine:true},
+  ind:{e9:true,e20:true,vw:true,vol:false,dom:true,pine:true,zn:true},
   day:null,today:new Map(),prev:[],prevDay:null,vwm:new Map(),vol:new Map(),pine:[],
   rows:[],e9:[],e20:[],vw:[],ch:null,sub:null,s:{},ro:null,live:null,price:null,open:null,ptime:null,fitDone:false};
 try{const v=+localStorage.getItem(CHK);if(v===1||v===5||v===15)CH.iv=v;
@@ -3563,6 +3652,80 @@ function chDomAt(r){
  const st=chMin(chHM(r.t)),en=st+CH.iv-1;for(let m=en;m>=st;m--){const v=CH.domMap.get(m);if(v!=null)return v;}return null;
 }
 const CH_UP="#2dd4a0",CH_DN="#ff5c72";
+/* ═══ [v3.3] مناطق العرض والطلب ═══
+   lbZones = نقل حرفي لـ lb_zones في liq.py (نفس القاعدة والترتيب والحدود):
+   الاندفاع: جسم ≥ 1.5× متوسط مدى آخر 12 شمعة و≥ 60% من مداها · القاعدة حتى 3 شموع مداها ≤ 0.8× المتوسط
+   (وإلا الشمعة السابقة وحدها) · طلب [أدنى قاع القاعدة، أعلى جسم] · عرض [أدنى جسم، أعلى قمة] ·
+   تُكسر بإغلاق خلف طرفها البعيد · bars = [[hm,o,h,l,c],…] مكتملة فقط. */
+function lbZones(bars){
+ const zones=[];
+ for(let i=1;i<bars.length;i++){
+  const hist=bars.slice(Math.max(0,i-12),i);
+  const A=hist.reduce((a,b)=>a+(b[2]-b[3]),0)/hist.length;
+  const [hm,o,h,l,c]=bars[i];const body=Math.abs(c-o),rng=h-l;
+  if(A<=0||rng<=0||body<1.5*A||body<0.6*rng)continue;
+  let base=[];
+  for(let j=i-1;j>Math.max(-1,i-4);j--){if(bars[j][2]-bars[j][3]<=0.8*A)base.push(bars[j]);else break;}
+  if(!base.length)base=[bars[i-1]];
+  let z;
+  if(c>o)z={kind:"demand",lo:Math.min(...base.map(b=>b[3])),hi:Math.max(...base.map(b=>Math.max(b[1],b[4])))};
+  else z={kind:"supply",lo:Math.min(...base.map(b=>Math.min(b[1],b[4]))),hi:Math.max(...base.map(b=>b[2]))};
+  if(z.hi-z.lo<0.25)z.hi+=0.25;
+  z.t=hm;z.broken=null;z.tested=null;z.tests=0;
+  let inPrev=false;
+  for(const b of bars.slice(i+1)){
+   if((z.kind==="demand"&&b[4]<z.lo)||(z.kind==="supply"&&b[4]>z.hi)){z.broken=b[0];break;}
+   const touch=z.kind==="demand"?b[3]<=z.hi:b[2]>=z.lo;
+   if(touch&&!inPrev){z.tests++;z.tested=z.tested||b[0];}
+   inPrev=touch;
+  }
+  z.lo=Math.round(z.lo*100)/100;z.hi=Math.round(z.hi*100)/100;
+  zones.push(z);
+ }
+ return zones;
+}
+/* المناطق للفاصل الحالي: 5 د = مناطق البوت نفسها من Render · 1 و15 د = نفس القاعدة على شموع اليوم المكتملة */
+function chZones(){
+ if(!CH.ind.zn||!CH.day)return [];
+ let zs=[];
+ if(CH.iv===5){
+  const D=lbData();if(!D||!Array.isArray(D.lb_zones)||(D.lb_day&&D.lb_day!==CH.day))return [];
+  zs=D.lb_zones;
+ }else{
+  const bars=[...CH.today.values()].filter(r=>!r.lv).sort((a,b)=>a.t-b.t).map(r=>[chHM(r.t),r.o,r.h,r.l,r.c]);
+  zs=lbZones(bars);
+ }
+ return zs.filter(z=>z&&!z.broken&&qOk(z.lo)&&qOk(z.hi))
+          .map(z=>({kind:z.kind,lo:+z.lo,hi:+z.hi,t:chT(CH.day,z.t)})).filter(z=>z.t!=null);
+}
+/* رسم المناطق: مستطيل من شمعة الاندفاع حتى الحافة اليمنى · خلف الشموع (zOrder bottom) */
+class ChZonesPrim{
+ constructor(){this.z=[];this.s=null;this.c=null;this.req=null;const self=this;
+  this.pv=[{zOrder:()=>"bottom",renderer:()=>({draw:(tg)=>self.draw(tg)})}];}
+ attached(p){this.s=p.series;this.c=p.chart;this.req=p.requestUpdate;}
+ detached(){this.s=null;this.c=null;this.req=null;}
+ set(z){const k=JSON.stringify(z);if(k===this.k)return;this.k=k;this.z=z;if(this.req)this.req();}
+ updateAllViews(){}
+ paneViews(){return this.pv;}
+ draw(tg){
+  if(!this.s||!this.c||!this.z.length)return;
+  const ts=this.c.timeScale();
+  tg.useBitmapCoordinateSpace(sc=>{
+   const ctx=sc.context,hr=sc.horizontalPixelRatio,vr=sc.verticalPixelRatio,W=sc.bitmapSize.width;
+   for(const z of this.z){
+    let x=ts.timeToCoordinate(z.t);if(x==null)x=0;
+    const y1=this.s.priceToCoordinate(z.hi),y2=this.s.priceToCoordinate(z.lo);
+    if(y1==null||y2==null)continue;
+    const X=Math.max(0,Math.round(x*hr)),Y=Math.round(Math.min(y1,y2)*vr),H=Math.max(1,Math.round(Math.abs(y2-y1)*vr));
+    if(X>=W)continue;
+    const up=z.kind==="demand";
+    ctx.fillStyle=up?"rgba(45,212,160,.13)":"rgba(255,92,114,.13)";ctx.fillRect(X,Y,W-X,H);
+    ctx.fillStyle=up?"rgba(45,212,160,.55)":"rgba(255,92,114,.55)";
+    const lw=Math.max(1,Math.round(vr));ctx.fillRect(X,Y,W-X,lw);ctx.fillRect(X,Y+H-lw,W-X,lw);
+   }
+  });
+ }
+}
 function chEnsure(){
  if(CH.ch)return true;
  const L=window.LightweightCharts, el=document.getElementById("chMain"), es=document.getElementById("chSub");
@@ -3578,6 +3741,7 @@ function chEnsure(){
   handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true}};
  CH.ch=L.createChart(el,Object.assign({},base,{width:el.clientWidth,height:el.clientHeight}));
  CH.s.c=CH.ch.addCandlestickSeries({upColor:CH_UP,downColor:CH_DN,borderVisible:false,wickUpColor:CH_UP,wickDownColor:CH_DN,priceLineVisible:true,priceLineWidth:1});
+ try{CH.zp=new ChZonesPrim();CH.s.c.attachPrimitive(CH.zp);}catch(e){CH.zp=null;console.log("zones",e);}   // [v3.3]
  const ln=c=>({color:c,lineWidth:1.5,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
  CH.s.e9=CH.ch.addLineSeries(ln("#FBBF24"));CH.s.e20=CH.ch.addLineSeries(ln("#A78BFA"));CH.s.vw=CH.ch.addLineSeries(ln("#60A5FA"));
  CH.s.vol=CH.ch.addHistogramSeries({priceScaleId:"vol",priceFormat:{type:"volume"},lastValueVisible:false,priceLineVisible:false});
@@ -3623,17 +3787,19 @@ function chDraw(){
   for(const x of CH.pine){const t=chT(x[0],x[1]);if(t!=null&&have.has(t))mk.push({time:t,position:x[2]==="C"?"belowBar":"aboveBar",shape:"circle",size:.7,
    color:x[2]==="C"?"#00C853":"#D50000"});}}
  mk.sort((a,b)=>a.time-b.time);CH.s.c.setMarkers(mk);
+ let zn=[];try{zn=chZones();if(CH.zp)CH.zp.set(zn);}catch(e){console.log("zones",e);}   // [v3.3]
  const sub=document.getElementById("chSub");if(sub)sub.style.display=CH.ind.dom?"":"none";
  CH.s.dom.setData(CH.ind.dom?R.map(r=>{const d=chDomAt(r);return d==null?{time:r.t}:{time:r.t,value:+d};}):[]);
  if(!CH.fitDone&&R.length){CH.fitDone=true;const n=R.length,w=CH.iv===1?120:(CH.iv===5?78:40);
   try{CH.ch.timeScale().setVisibleLogicalRange({from:Math.max(0,n-w),to:n+8});}catch(e){}}
  chLegend(null);
  const tdy=[...CH.today.values()];
- if(inf)inf.textContent=CH.err?`⚠ ${CH.err}`:`${CH.iv} د · ${tdy.length} شمعة اليوم${CH.prev.length?" + السابقة":""}${CH.iv===5&&CH.ind.pine?` · إشارات ${mk.length}`:""}`;
+ if(inf)inf.textContent=CH.err?`⚠ ${CH.err}`:`${CH.iv} د · ${tdy.length} شمعة اليوم${CH.prev.length?" + السابقة":""}${CH.iv===5&&CH.ind.pine?` · إشارات ${mk.length}`:""}${CH.ind.zn?` · مناطق ${zn.length}`:""}`;
  document.querySelectorAll("#chB button").forEach(b=>b.classList.toggle("on",+b.dataset.iv===CH.iv));
  document.querySelectorAll("#chI button").forEach(b=>b.classList.toggle("on",!!CH.ind[b.dataset.ind]));
  const ft=document.getElementById("chFoot");
  if(ft)ft.innerHTML=(CH.iv===5&&CH.ind.pine?"• أخضر تحت الشمعة = إشارة كول · • أحمر فوقها = إشارة بوت (مؤشر SPY 5M على شموع SPY · قد يختلف حجم TradingView) · ":"")
+  +(CH.ind.zn?(CH.iv===5?"المستطيل الأخضر = منطقة طلب · الأحمر = منطقة عرض (مناطق البوت نفسها · المكسورة لا تُرسم) · ":"المستطيل الأخضر = منطقة طلب · الأحمر = منطقة عرض (بقاعدة البوت على شموع "+CH.iv+" د · للعرض فقط · المكسورة لا تُرسم) · "):"")
   +`الشارت: <a href="https://www.tradingview.com/" target="_blank" rel="noopener" style="color:inherit">TradingView Lightweight Charts™</a>`;
 }
 function chHead(){
