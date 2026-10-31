@@ -1,8 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 ═══════════════════════════════════════════════════════════════════════════════
-  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.3.0)
+  لوحة سيولة العقود — تطبيق مستقل تماماً  (v3.4.0)
 ═══════════════════════════════════════════════════════════════════════════════
+  ㊿+++ [v3.4.0] (1 نوفمبر · القرار 298 · يتطلب liq v3.8 على Render)
+     ① بجانب سعر SPX: شارة القرار العام (كول قوي/كول/انتظر/بوت/بوت قوي) · سطر تحته بخط أصغر:
+        د1 · د5 · د15 · د30 بحكم كل فاصل (أخضر/أخضر أفتح/رمادي/أحمر أفتح/أحمر) + اتجاه الجلسة ·
+        يتحدّث مع كل تحديث للّوحة (2 ث) · لا تُعرض مدة الصلاحية.
+     ② الضغط على السطر يفتح شبكة الأصوات الثمانية × الفواصل الأربعة (نقاط ملوّنة) + الاتفاقات.
+     ③ بطاقة الاندفاع في الرئيسية: حركة SPX بالنقاط (الآن/الأعلى/الأدنى) ومستويا الهدف والوقف ·
+        حركة العقد بالنسبة (الآن/الأعلى/الأدنى) · شروط الاندفاع الحية تحت البطاقة.
+     ④ المحفظة G5: دفتر SPX ($10,000) ودفتر SPY ($1,000) · بطاقة لكل استراتيجية (الرصيد ·
+        العائد · الصفقات · الرابحة) وتحتها شروطها «القيمة / العتبة» أخضر إن تحقّق وأحمر إن لم يتحقق.
+     ⑤ لا تغيير في أي حساب أو نداء Tradier (البيانات الجديدة من Render ضمن /board?part=tick).
   ㊿++ [v3.3.0] (26 أكتوبر · حادثة النداءات + طلب خالد)
      ① حصّة Tradier: كانت نداءات طلبات liq (/json و/snap) تُعدّ ضمن «اللوحة» وliq يعدّها
         مرة ثانية (vercel_liq) ⇒ المجموع المعروض أعلى من الحقيقي والحماية تبطّئ بلا داعٍ.
@@ -388,7 +398,7 @@ except Exception:
     from datetime import timezone as _tz, timedelta as _td
     NY = _tz(_td(hours=-4))
 
-VERSION    = "3.3.0"
+VERSION    = "3.4.0"
 TD_BASE    = "https://api.tradier.com/v1"
 TD_TOKEN   = os.getenv("TRADIER_PROD_TOKEN", "").strip()
 TD_TIMEOUT = float(os.getenv("TD_TIMEOUT", "8"))
@@ -1857,7 +1867,8 @@ def board_tick(tf=5, since=""):
         out["pine_err"] = f"{type(e).__name__}: {e}"[:120]
     if lv.get("ok"):
         out["live"] = {k: lv.get(k) for k in ("bot4", "gd_pending", "rpm", "link", "agg_age",
-                                             "sh_today", "m_skip", "srv_t")}
+                                             "sh_today", "m_skip", "srv_t",
+                                             "tf", "conds", "orng", "g5")}    # [v3.4]
     else:
         out["live_err"] = lv.get("err")
     out["td_min"] = calls_per_min()
@@ -2396,6 +2407,39 @@ details.adv[open]>summary{color:var(--tx)}
 @media (min-width:1200px){body{max-width:780px}}
 /* [v3.2] الرأس 4 أسطر · الشارت الجديد · ملء الشاشة */
 .px .l1{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+/* [v3.4] القرار العام وسطر الفواصل */
+.tfall{display:inline-block;font-size:12.5px;font-weight:800;padding:3px 10px;border-radius:10px;align-self:center;
+ border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:#C9D6EA;white-space:nowrap}
+.tfl{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 2px;font-size:11px;cursor:pointer;align-items:center}
+.tfl span{padding:2px 7px;border-radius:8px;background:rgba(255,255,255,.06);white-space:nowrap;font-weight:700}
+.tfl i{font-style:normal;color:#8EA3C2;font-weight:600;margin-inline-end:3px}
+.tfc2{color:#22C55E!important;background:rgba(34,197,94,.16)!important}
+.tfc1{color:#86EFAC!important;background:rgba(134,239,172,.10)!important}
+.tfc0{color:#9AA8BC!important}
+.tfcm1{color:#FCA5A5!important;background:rgba(252,165,165,.10)!important}
+.tfcm2{color:#EF4444!important;background:rgba(239,68,68,.16)!important}
+.tfp{flex:1 1 100%;margin:6px 0 2px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
+ border-radius:12px;padding:8px 9px;font-size:11px}
+.tfp table{width:100%;border-collapse:collapse}
+.tfp th,.tfp td{padding:3px 2px;text-align:center;font-weight:600}
+.tfp th:first-child,.tfp td:first-child{text-align:right;color:#A9BBD6;font-weight:600}
+.tfp .dt{display:inline-block;width:11px;height:11px;border-radius:50%}
+.tfp .dU{background:#22C55E}.tfp .dD{background:#EF4444}.tfp .dN{background:rgba(255,255,255,.18)}
+.tfp .ft{margin-top:6px;color:#A9BBD6;line-height:1.6}
+.cds{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;font-size:10.5px}
+.cds span{padding:2px 6px;border-radius:7px;white-space:nowrap}
+.cds .y{background:rgba(34,197,94,.14);color:#86EFAC}.cds .n{background:rgba(239,68,68,.12);color:#FCA5A5}
+.cds b{font-weight:700;color:#C9D6EA;margin-inline-end:3px}
+.cds u{text-decoration:none;color:#8EA3C2;font-size:10px;margin-inline-end:2px}
+.g5h{font-size:12.5px;font-weight:800;margin:10px 0 6px;display:flex;justify-content:space-between;align-items:baseline}
+.g5h s{text-decoration:none;font-size:10.5px;color:#8EA3C2;font-weight:600}
+.g5g{display:grid;grid-template-columns:1fr;gap:8px}
+.g5c{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);border-radius:13px;padding:9px 10px;cursor:pointer}
+.g5c.on{border-color:rgba(96,165,250,.7);background:rgba(96,165,250,.08)}
+.g5c .r1{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.g5c .r1 b{font-size:13px}.g5c .r1 em{font-style:normal;font-size:15px;font-weight:800;direction:ltr}
+.g5c .r2{display:flex;gap:10px;flex-wrap:wrap;font-size:10.5px;color:#A9BBD6;margin-top:3px}
+.g5c .sd{font-size:10px;color:#8EA3C2;margin-top:4px}
 .px .l2,.px .l3,.px .l4{display:block;font-size:11px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .px .l3 .vix,.px .l3 .conc{display:inline;margin:0}
 .px .l3 .conc:before{content:" · ";color:var(--dim)}
@@ -2424,10 +2468,12 @@ body.chfull{overflow:hidden}
   <button class="tab" id="tbPf" type="button">محفظة بوت السيولة</button>
  </div>
  <div class="px">
-  <div class="l1"><b id="spot">—</b><span class="chg" id="chg"></span></div>
+  <div class="l1"><b id="spot">—</b><span class="tfall" id="tfAll" title="القرار العام">…</span><span class="chg" id="chg"></span></div>
+  <div class="tfl" id="tfLine" role="button" aria-label="الأصوات"></div>
   <div class="l2 sub"><span id="ts">…</span> <span id="ses" class="bdg">…</span></div>
   <div class="l3"><span class="vix" id="vix"></span><span class="conc" id="conc"></span></div>
   <div class="l4" id="gam"></div></div>
+ <div class="tfp hide" id="tfP"></div>
 </div>
 
 <div id="vMain">
@@ -2456,9 +2502,10 @@ body.chfull{overflow:hidden}
   <div class="lbh"><b>بوت السيولة الجديد · الاندفاع</b><span class="lbst" id="lbSt">…</span></div>
   <div id="lbNew"></div>
   <div class="lbc" id="lbC">جارٍ القراءة…</div>
+  <div id="lbCond"></div>
   <button class="lbbtn" id="lbBtn" type="button">القرارات ▾</button>
   <div class="lblist hide" id="lbList"></div>
-  <div class="vg">ورقي في G4 · الحي يتبع MOM_ENABLED</div>
+  <div class="vg">ورقي في G5 · الحي يتبع MOM_ENABLED</div>
   <div class="lbcl" id="lbCalls"></div>
  </div>
  <div class="ts"><div class="nlb"><span>المسيطرون · اليوم</span><span id="tsn" style="font-size:9.5px">مقياس ثابت 20–80%</span></div>
@@ -2552,13 +2599,14 @@ body.chfull{overflow:hidden}
 </div>
 
 <div id="vPf" class="hide"><div class="pfw">
+ <div class="pfc hide" id="pfG5"></div>
  <div class="pfc pfhero">
   <div class="pft"><b>محفظة بوت السيولة</b><span id="pfSt">جارٍ التحميل…</span></div>
   <div class="pfsub" id="pfRule">رأس المال $10,000 · 15% للصفقة · عقد واحد · بلا عمولة</div>
   <div class="seg" id="pfG"></div>
  </div>
  <div class="pfc">
-  <div class="pfh2">البوت الفعلي <span id="pfBotRule" class="pfmut"></span></div>
+  <div class="pfh2" id="pfBotH">البوت الفعلي <span id="pfBotRule" class="pfmut"></span></div>
   <div id="pfBotOpen"></div>
   <div id="pfBotK"></div>
   <div id="pfBotDW"></div>
@@ -2573,7 +2621,7 @@ body.chfull{overflow:hidden}
   <div id="pfShDW"></div>
   <div id="pfShT"></div>
  </div>
- <div class="pfnote">الربح = منتصف الدخول × 100 × (Bid الخروج ÷ Ask الدخول − 1) × العقود · البوت الفعلي = خروجه الحي · الظلال = قاعدة خروجها المعتمدة محسوبة من مسار العقد · G1/G2 محسوبتان بالقواعد الحالية (الوقف بلمسة).</div>
+ <div class="pfnote">الربح = منتصف الدخول × 100 × (Bid الخروج ÷ Ask الدخول − 1) × العقود · البوت الفعلي = خروجه الحي · الظلال = قاعدة خروجها المعتمدة محسوبة من مسار العقد · G1/G2 محسوبتان بالقواعد الحالية (الوقف بلمسة) · G5 (من 2/11): النقاط +10/−7 للجميع عدا SPY 5M الداخلي · R الخام والاتجاه ونسخة البوت تُسجَّل ولا تُعرض.</div>
 </div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -3115,9 +3163,10 @@ function lbPaint(d,live){
  St.textContent=opn.length?`${opn.length} مفتوحة`:(live?"يراقب":"خارج الجلسة");
  const lw=lk.mom_enabled?`<span style="color:#4ADE80">الحي مفعّل</span>`:`<span style="color:#FBBF24">الحي معطّل (MOM_ENABLED=0)</span>`;
  const lr=lk.last_rej?` · آخر رفض ${hm5(lk.last_rej.t)}: ${qEsc(lk.last_rej.why||"")}`:"";
- C.innerHTML=live?`الاندفاع: SPX ±10 خلال 5 د + خط الدقيقة ≥60/≤40 + مساحة ≥30 · حتى ${qEsc((lk.window||{}).last_entry_ny||"15:00")} NY · مركزان كحد أقصى · السلّم الثاني<br>اليوم <b>${today}</b> صفقة · <b>${sk.length}</b> إشارة تُخطّيت · ${lw}${lr}`
+ C.innerHTML=live?`الاندفاع: SPX ±10 خلال 5 د + خط الدقيقة ≥60/≤40 + مساحة VIX1D ≥30 · حتى ${qEsc((lk.window||{}).last_entry_ny||"15:00")} NY · مركزان كحد أقصى · الخروج +10/−7 نقاط SPX · 60 د<br>اليوم <b>${today}</b> صفقة · <b>${sk.length}</b> إشارة تُخطّيت · ${lw}${lr}`
   :(today?`انتهت الجلسة · ${today} صفقة اليوم`:"خارج الجلسة · يعمل 09:45–15:00 NY");
  Nw.innerHTML=qBotCards(D,live);
+ try{const cd=document.getElementById("lbCond");if(cd)cd.innerHTML=live?cdSides("M"):"";}catch(e){}
  Bt.style.display="";
  Bt.textContent=`الإشارات المتخطّاة (${sk.length}) ${LBOPEN?"▴":"▾"}`;
  if(LBOPEN){
@@ -3547,7 +3596,10 @@ function qCol(v){return !qOk(v)?QM:(Number(v)>0?QG:(Number(v)<0?QR:QM));}
 function qEsc(t){return String(t==null?"":t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 const QREASON={SL:"وقف",Trail:"متحرك",TP:"هدف +50%",Time:"انتهاء الوقت",TimeClose:"إغلاق 15:45",
  SPXbreak:"كسر SPX",Ladder:"السلّم",Lad:"السلّم",End:"نهاية النافذة",NoQuote:"بلا سعر",NoClose:"لم تُغلق",NoPrice:"بلا سعر"};
-function qReason(r){r=String(r||"");if(!r)return "—";if(/^SL/.test(r))return "وقف";if(/^Trail/.test(r))return "متحرك";return QREASON[r]||r;}
+function qReason(r,rule){r=String(r||"");if(!r)return "—";
+ if(rule==="pts"||rule==="pts15"){if(r==="TP")return rule==="pts"?"هدف +10 نقاط":"هدف +15 نقطة";if(r==="SL")return rule==="pts"?"وقف −7 نقاط":"وقف −10 نقاط";}
+ if(rule==="tp25"){if(r==="TP")return "هدف +25%";if(r==="SL")return "وقف −30%";}
+ if(rule==="meas"&&r==="SL")return "وقف −20%";if(/^SL/.test(r))return "وقف";if(/^Trail/.test(r))return "متحرك";return QREASON[r]||r;}
 const QHEAD=`<div class="qhd"><span>العقد<i>الاستراتيجية · الوقت</i></span><span>القيمة السوقية<i>الكمية</i></span><span>آخر Bid<i>م. التكلفة</i></span><span>إجمالي الربح<i>الربح %</i></span></div>`;
 function qRow(c){
  const sc=c.side==="CALL"?"var(--up)":"var(--dn)";
@@ -3555,10 +3607,16 @@ function qRow(c){
  const win=qOk(c.pnl_usd)&&c.pnl_usd>=0;
  const arm=(c.rule==="lad2"||c.rule==="lad1")?c.armed2:c.armed;
  const tag=open?(arm?`<span class="qtag" style="background:rgba(74,222,128,.16);color:#4ADE80">مُسلَّحة</span>`:`<span class="qtag" style="background:rgba(74,144,255,.18);color:#8ab6ff">مفتوحة</span>`)
-  :`<span class="qtag" style="background:${win?"rgba(74,222,128,.16)":"rgba(248,113,113,.16)"};color:${win?"#4ADE80":"#F87171"}">مغلقة · ${qEsc(qReason(c.reason))} ${hm5(c.exit_t)}</span>`;
+  :`<span class="qtag" style="background:${win?"rgba(74,222,128,.16)":"rgba(248,113,113,.16)"};color:${win?"#4ADE80":"#F87171"}">مغلقة · ${qEsc(qReason(c.reason,c.rule))} ${hm5(c.exit_t)}</span>`;
  const lc=x=>!qOk(x)?"#8EA3C2":(x>0?"#4ADE80":(x<0?"#F87171":"#8EA3C2"));
  const sub=[];
- if(c.rule==="lad2"||c.rule==="lad1"){                       // [v3.2] السلّم
+ if(c.rule==="pts"||c.rule==="pts15"){                        // [v3.4] نقاط SPX
+  const pp=v=>qOk(v)?`<bdi dir="ltr">${v>0?"+":(v<0?"−":"")}${Math.abs(v).toFixed(1)}</bdi>`:"—";
+  sub.push(`SPX الآن <b style="color:${qCol(c.spx_pts)}">${pp(c.spx_pts)}</b> نقطة (دخول ${qF(c.spx0,1)})`);
+  sub.push(`الهدف <b>${qF(c.spx_tp,1)}</b> · الوقف <b>${qF(c.spx_sl,1)}</b>`);
+  sub.push(`SPX أعلى <b style="color:${QG}">${pp(c.spx_hi_pts)}</b> · أدنى <b style="color:${QR}">${pp(c.spx_lo_pts)}</b>`);
+  sub.push(`العقد الآن <b style="color:${qCol(c.now_pct_mid)}">${qPc(c.now_pct_mid,0)}</b> · أعلى <b>${qPc(c.c_hi_pct,0)}</b> · أدنى <b>${qPc(c.c_lo_pct,0)}</b>`);
+ }else if(c.rule==="lad2"||c.rule==="lad1"){                       // [v3.2] السلّم
   sub.push(`الآن <b>${qPc(c.now_pct_mid,0)}</b> بالمنتصف`);
   sub.push(`وقف السلّم <b>${qPc(c.lad_stop_pct,0)}</b> ($${qF(c.sl_px)})`);
   sub.push(c.armed2?`<span style="color:#4ADE80">مُسلَّحة ✓ (الوقف ≥ الدخول)</span>`:`غير مُسلَّحة`);
@@ -3573,11 +3631,11 @@ function qRow(c){
   if(qOk(c.tp_px))sub.push(`الهدف <b>$${qF(c.tp_px)}</b>`);
   if(qOk(c.spx_stop))sub.push(`كسر SPX عند <b>${qF(c.spx_stop,1)}</b>`);
  }
- sub.push(`الذروة <b>$${qF(c.peak)}</b> (${qPc(c.peak_pct,0)})`);
- if(open)sub.push(`المنقضي <b>${qF(c.elapsed_min,0)} د</b> · المتبقي <b>${qF(c.left_min,0)} د</b> من ${c.rule==="tp50"||c.rule==="tp30"?30:60}`);
+ if(c.rule!=="pts"&&c.rule!=="pts15")sub.push(`الذروة <b>$${qF(c.peak)}</b> (${qPc(c.peak_pct,0)})`);
+ if(open)sub.push(`المنقضي <b>${qF(c.elapsed_min,0)} د</b> · المتبقي <b>${qF(c.left_min,0)} د</b>`);
  if(c.spy){const y=c.spy,lv=c.live||y.live||{};
   const LST={sent:"أُرسل للحي",sending:"قيد الإرسال",ambig:"ردّ غامض",err:"خطأ إرسال",rej:"رفضه الحي",nospy:"لا عقد SPY",off:"الربط مقفل",noexec:"التنفيذ غير محمّل"};
-  sub.push(`SPY <b>${qF(y.k,0)}</b> دخول <b>$${qF(y.ca0)}</b> الآن <b>$${qF(y.bid)}</b> <span style="color:${qCol(y.pnl_pct)}">${qPc(y.pnl_pct,0)}</span> · وقف <b>${qPc(y.lad_stop_pct,0)}</b>`);
+  sub.push(`SPY <b>${qF(y.k,0)}</b> دخول <b>$${qF(y.ca0)}</b> الآن <b>$${qF(y.bid)}</b> <span style="color:${qCol(y.pnl_pct)}">${qPc(y.pnl_pct,0)}</span>${qOk(y.lad_stop_pct)?` · وقف <b>${qPc(y.lad_stop_pct,0)}</b>`:""}`);
   sub.push(`الحي: ${qEsc(LST[lv.st]||lv.st||"—")}${lv.why?` — ${qEsc(lv.why)}`:""}${lv.exit?` · الخروج: ${qEsc(lv.exit)}`:""}`);}
  if(c.skip)sub.push(`<span style="color:#FCA5A5">رأس المال لا يكفي ⇒ تُتخطّى في المحفظة</span>`);
  return `<div class="qrow"><div class="qc q1"><b>${qF(c.k,0)} <span style="color:${sc}">${c.side}</span></b><s>${qEsc(c.src==="BOT"?"البوت القديم":(c.src==="A"?"نسخة البوت":(c.src==="M"?"الاندفاع":c.name)))} · ${hm5(c.t)}</s></div>`
@@ -3631,8 +3689,52 @@ function chMerge(j){
  if(Array.isArray(j.pine))CH.pine=j.pine;
  if(qOk(j.price)){CH.price=+j.price;CH.ptime=j.price_t;}
  if(qOk(j.open))CH.open=+j.open;
- if(j.live)CH.live=j.live;
+ if(j.live){CH.live=j.live;try{tfPaint();}catch(e){console.log("tf",e);}}
 }
+/* ═══ [v3.4] قرار الفواصل: الشارة · السطر · شبكة الأصوات ═══ */
+const TFJ={"2":["كول قوي","tfc2"],"1":["كول","tfc1"],"0":["محايد","tfc0"],"-1":["بوت","tfcm1"],"-2":["بوت قوي","tfcm2"]};
+const TFA={"2":["كول قوي","tfc2"],"1":["كول","tfc1"],"0":["انتظر","tfc0"],"-1":["بوت","tfcm1"],"-2":["بوت قوي","tfcm2"]};
+const TFS={"1":["كول","tfc2"],"0.5":["مائل كول","tfc1"],"0":["محايد","tfc0"],"-0.5":["مائل بوت","tfcm1"],"-1":["بوت","tfcm2"]};
+const TFL=["1","5","15","30"];
+let TFOPEN=false;
+function tfPaint(){
+ const T=CH.live&&CH.live.tf, A=document.getElementById("tfAll"), Ln=document.getElementById("tfLine"), P=document.getElementById("tfP");
+ if(!A)return;
+ const fresh=CH.at&&Date.now()-CH.at<20000;
+ if(!T||!T.ok){A.textContent=T&&T.err?"الفواصل: "+String(T.err).slice(0,24):"الفواصل —";A.className="tfall";Ln.innerHTML="";P.classList.add("hide");return;}
+ const a=TFA[String(T.all)]||TFA["0"];
+ A.textContent=a[0];A.className="tfall "+a[1]+(fresh?"":" stale");A.style.opacity=fresh?1:.55;
+ const s=TFS[String(T.ses)]||TFS["0"];
+ Ln.innerHTML=TFL.map(k=>{const x=(T.tf||{})[k]||{},j=TFJ[String(x.j)]||TFJ["0"];
+   return `<span class="${j[1]}"><i>د${k}</i>${j[0]}</span>`;}).join("")
+  +`<span class="${s[1]}"><i>الجلسة</i>${s[0]}</span><span style="background:none;color:#8EA3C2">${TFOPEN?"▴":"▾"}</span>`;
+ if(!TFOPEN){P.classList.add("hide");return;}
+ const nm=T.votes_ar||["VWAP","EMA 9/21","RSI 14","MACD","ADX","العدوانية","تدفّق الحجم","تمركز السترايك"];
+ const dot=v=>`<span class="dt ${v>0?"dU":(v<0?"dD":"dN")}"></span>`;
+ let h=`<table><tr><th>الصوت</th>${TFL.map(k=>`<th>د${k}</th>`).join("")}<th>اتفاق</th></tr>`;
+ for(let i=0;i<8;i++){
+  const vs=TFL.map(k=>(((T.tf||{})[k]||{}).v||[])[i]||0);
+  const up=vs.filter(v=>v>0).length,dn=vs.filter(v=>v<0).length;
+  h+=`<tr><td>${qEsc(nm[i])}</td>${vs.map(v=>`<td>${dot(v)}</td>`).join("")}<td>${up>dn?`<span style="color:#86EFAC">${up}/4 كول</span>`:(dn>up?`<span style="color:#FCA5A5">${dn}/4 بوت</span>`:`<span style="color:#9AA8BC">—</span>`)}</td></tr>`;
+ }
+ h+=`<tr><td><b>المجموع</b></td>${TFL.map(k=>{const x=(T.tf||{})[k]||{},j=TFJ[String(x.j)]||TFJ["0"];
+   return `<td class="${j[1]}" style="background:none">${x.s>0?"+":""}${x.s??"—"}</td>`;}).join("")}<td></td></tr></table>`;
+ const w=T.w||[1,2,3,3];
+ const ag=TFL.filter(k=>{const j=((T.tf||{})[k]||{}).j||0;return T.all!==0&&Math.sign(j)===Math.sign(T.all);}).length;
+ h+=`<div class="ft">القرار العام <b class="${a[1]}" style="background:none">${a[0]}</b> · المجموع الموزون ${T.tot>0?"+":""}${T.tot} من ±18 (الأوزان ${w.join("/")}) · ${T.all!==0?`${ag} من 4 فواصل باتجاهه`:"لا اتجاه غالب"}<br>`
+  +`اتجاه الجلسة <b class="${s[1]}" style="background:none">${s[0]}</b> (د15 · د30 · VWAP · أول كسر لنطاق أول 30 د${T.brk?` = ${T.brk>0?"فوق":"تحت"}`:" = لم يحدث"})`
+  +`<br>كول قوي ≥ +5 مع أصوات السيولة (6–8) ≥ +2 · كول ≥ +3 · بوت ≤ −3 · بوت قوي ≤ −5 مع ≤ −2 · ${hm5(T.t)} NY</div>`;
+ P.innerHTML=h;P.classList.remove("hide");
+}
+document.addEventListener("click",e=>{const t=e.target&&e.target.closest&&e.target.closest("#tfLine");if(!t)return;
+ TFOPEN=!TFOPEN;try{tfPaint();}catch(x){}});
+/* [v3.4] الشروط: [الاسم، القيمة، العتبة، تحقّق؟] ⇒ أخضر/أحمر */
+function cdV(v){if(v===null||v===undefined||v==="")return "—";if(typeof v==="number"){const a=Math.abs(v);return a>=100?v.toFixed(1):(a>=10?v.toFixed(1):v.toFixed(2)).replace(/\\.?0+$/,"")||"0";}return qEsc(v);}
+function cdHtml(list){if(!Array.isArray(list)||!list.length)return "";
+ return `<div class="cds">${list.map(c=>`<span class="${c[3]?"y":"n"}"><b>${qEsc(c[0])}</b>${cdV(c[1])}${c[2]!==null&&c[2]!==undefined?` <u>/ ${cdV(c[2])}</u>`:""}</span>`).join("")}</div>`;}
+function cdSides(s){const C=CH.live&&CH.live.conds;const x=C&&C[s];if(!x||x.err)return "";
+ return `<div style="font-size:10px;color:#8EA3C2;margin-top:4px">كول</div>${cdHtml(x.CALL)}<div style="font-size:10px;color:#8EA3C2;margin-top:3px">بوت</div>${cdHtml(x.PUT)}`;}
+
 function chBuild(){
  const rows=CH.prev.concat([...CH.today.values()].sort((a,b)=>a.t-b.t));
  CH.rows=rows;const cl=rows.map(r=>r.c);CH.e9=chEma(cl,9);CH.e20=chEma(cl,20);
@@ -3866,8 +3968,10 @@ document.addEventListener("click",e=>{const id=e.target&&e.target.id;
 const PFK="liq_pf_sel";
 const PF={g:null,s:null,bot:null,sh:null,at:0,busy:false,err:null,t:null,sum:null,meta:null};
 try{const o=JSON.parse(localStorage.getItem(PFK)||"{}");PF.g=o.g||null;PF.s=o.s||null;}catch(e){}
-const SH_ORDER=["MS","R","T","GD","RND","BOT","A","M","E","F","G","W"];
-function pfHero(g){return (g&&+String(g).slice(1)>=4)?"M":"BOT";}        // [v3.2] G4+ ⇒ بوت السيولة الجديد
+const SH_ORDER=["M","K","RF","GF","GD","O","RND","MS","MA","S5","R","T","BOT","A","E","F","G","W"];
+const G5_SPX=["M","K","RF","GF","GD","O","RND"], G5_SPY=["MS","MA","S5"];
+function pfG5(g){return !!(g&&+String(g).slice(1)>=5);}
+function pfHero(g){return pfG5(g)?"":((g&&+String(g).slice(1)>=4)?"M":"BOT");}   // [v3.4] G5 بلا بطل: بطاقة لكل استراتيجية
 function pfStop(){clearTimeout(PF.t);PF.t=null;}
 function pfSave(){try{localStorage.setItem(PFK,JSON.stringify({g:PF.g,s:PF.s}));}catch(e){}}
 function pfGet(g,s){
@@ -3891,7 +3995,7 @@ function pfPoll(){
    if(!PF.s||srcs.indexOf(PF.s)<0)PF.s=srcs[0]||null;
    pfSave();
    const jobs=[];
-   if(PF.bot===null)jobs.push(pfGet(PF.g,pfHero(PF.g)).then(x=>{PF.bot=x.trades||[];}));
+   if(PF.bot===null)jobs.push(pfHero(PF.g)?pfGet(PF.g,pfHero(PF.g)).then(x=>{PF.bot=x.trades||[];}):Promise.resolve(PF.bot=[]));
    if(PF.s)jobs.push(pfGet(PF.g,PF.s).then(x=>{PF.sh={g:PF.g,s:PF.s,rows:x.trades||[]};}));
    return Promise.all(jobs);})
   .then(()=>{PF.at=Date.now();PF.err=null;})
@@ -3904,13 +4008,14 @@ function pfStrats(){
  const g=PF.sum&&PF.sum[PF.g]; if(!g)return [];
  const hero=pfHero(PF.g);
  const ks=Object.keys(g).filter(k=>k!==hero&&k[0]!=="_");
+ if(pfG5(PF.g))G5_SPX.concat(G5_SPY).forEach(k=>{if(ks.indexOf(k)<0)ks.push(k);});
  return ks.sort((a,b)=>(SH_ORDER.indexOf(a)+99*(SH_ORDER.indexOf(a)<0))-(SH_ORDER.indexOf(b)+99*(SH_ORDER.indexOf(b)<0)));
 }
 function pfKpi(k){
  if(!k)return `<div class="qempty">لا صفقات في هذه المجموعة</div>`;
  const it=(u,b,c,sub)=>`<div><u>${u}</u><b style="color:${c||"#EAF2FF"}">${b}</b>${sub?`<s>${sub}</s>`:""}</div>`;
- return `<div class="pfk"><div class="big"><u>الرصيد</u><b style="color:${qCol(k.pnl)}">${qUsd(k.eq)}</b><s>${qUsd(k.pnl,1)} · ${qPc(k.ret_pct)} من ${qUsd(PF.meta&&PF.meta.cfg?PF.meta.cfg.start:10000)}</s></div>`
-  +it("الصفقات",`${k.taken}`,null,`من ${k.n} إشارة${k.open?` · ${k.open} مفتوحة`:""}`)
+ return `<div class="pfk"><div class="big"><u>الرصيد</u><b style="color:${qCol(k.pnl)}">${qUsd(k.eq)}</b><s>${qUsd(k.pnl,1)} · ${qPc(k.ret_pct)} من ${qUsd(qOk(k.start)?k.start:(PF.meta&&PF.meta.cfg?PF.meta.cfg.start:10000))}</s></div>`
+  +it("الصفقات",`${k.taken}`,null,`من ${k.n} إشارة${k.open?` · ${k.open} مفتوحة`:""}${k.nofill?` · ${k.nofill} لم يُملأ`:""}`)
   +it("الرابحة",qOk(k.win_pct)?`${k.win_pct}%`:"—",null,`${k.wins} من ${k.closed}`)
   +it("متوسط الصفقة",qPc(k.avg_pct,1),qCol(k.avg_pct),`بحذف الأفضل ${qPc(k.avg_ex_best,1)}`)
   +it("أفضل / أسوأ",`${qPc(k.best_pct,0)}`,QG,`أسوأ ${qPc(k.worst_pct,0)}`)
@@ -3936,14 +4041,33 @@ function pfTable(rows){
   +R.map(r=>{const sc=r.side==="CALL"?"var(--up)":"var(--dn)";
    const res=r.open?`<span style="color:#8ab6ff">مفتوحة</span>`:(r.skip?`<span style="color:#FBBF24">تُخطّيت</span>`:(qOk(r.pct)?`<span style="color:${qCol(r.pct)}">${qPc(r.pct,1)}</span>`:"—"));
    return `<tr><td>${qDM(r.d)}</td><td class="n">${hm5(r.t)}</td><td>${qF(r.k,0)} <span style="color:${sc}">${r.side||""}</span></td>`
-    +`<td class="n">${qF(r.c0)}</td><td>${r.open?"—":`${hm5(r.x_t)} ${qEsc(qReason(r.reason))}`}${r.amb?" ⚠":""}</td><td class="n">${res}</td>`
+    +`<td class="n">${qF(r.c0)}</td><td>${r.open?"—":`${hm5(r.x_t)} ${qEsc(qReason(r.reason,((PF.sum&&PF.sum[PF.g]&&PF.sum[PF.g][PF.s])||{}).rule))}`}${r.amb?" ⚠":""}</td><td class="n">${res}</td>`
     +`<td>${r.qty||0}</td><td class="n" style="color:${qCol(r.pnl)}">${qOk(r.pnl)?qUsd(r.pnl,1):"—"}</td><td class="n">${qOk(r.eq)?qUsd(r.eq):"—"}</td></tr>`;}).join("")
   +`</table></div>`;
 }
+function pfG5Paint(){
+ const box=document.getElementById("pfG5"), g5=pfG5(PF.g);
+ const bh=document.getElementById("pfBotH"), bc=bh&&bh.parentNode;
+ if(!box)return;
+ box.classList.toggle("hide",!g5); if(bc)bc.classList.toggle("hide",g5);
+ if(!g5){box.innerHTML="";return;}
+ const g=(PF.sum&&PF.sum[PF.g])||{}, names=(PF.meta&&PF.meta.names)||{}, sh=(CH.live&&CH.live.sh_today)||{};
+ const card=k=>{const v=g[k],spy=G5_SPY.indexOf(k)>=0,st=spy?1000:10000;
+  const eq=v&&qOk(v.eq)?v.eq:st;
+  return `<div class="g5c${k===PF.s?" on":""}" data-s5="${qEsc(k)}"><div class="r1"><b>${qEsc(names[k]||k)}</b><em style="color:${qCol(v&&v.pnl)}">${qUsd(eq)}</em></div>`
+   +`<div class="r2"><span>العائد ${v?qPc(v.ret_pct,1):"—"}</span><span>الصفقات ${v?v.taken:0}${v&&v.open?` · ${v.open} مفتوحة`:""}</span><span>الرابحة ${v&&qOk(v.win_pct)?v.win_pct+"%":"—"}</span><span>اليوم ${sh[k]||0}</span></div>`
+   +`<div class="sd">${qEsc((v&&v.rule_ar)||(k==="S5"?"قياس SPY 5M (وقف −20% · سلّم 30/+5 · 60 د)":"+10/−7 نقاط SPX · 60 د"))}${k==="S5"?" · عقدان":(spy?" · عقد واحد · علامة فوق $200":"")}</div>`
+   +cdSides(k)+`</div>`;};
+ box.innerHTML=`<div class="g5h">دفتر SPX <s>$10,000 · 15% للصفقة · عقد SPX</s></div><div class="g5g">${G5_SPX.map(card).join("")}</div>`
+  +`<div class="g5h">دفتر SPY <s>$1,000 · ≤ $200 للصفقة</s></div><div class="g5g">${G5_SPY.map(card).join("")}</div>`;
+}
+document.addEventListener("click",e=>{const c=e.target&&e.target.closest&&e.target.closest("#pfG5 .g5c");if(!c)return;
+ const s=c.dataset.s5;if(!s||PF.s===s)return;PF.s=s;PF.sh=null;pfSave();try{pfPaint();}catch(x){}pfPoll();});
 function pfLive(){
  const D=lbData();
  const bo=document.getElementById("pfBotOpen"),so=document.getElementById("pfShOpen");
  if(!bo)return;
+ try{pfG5Paint();}catch(e){console.log("g5",e);}
  if(!D){bo.innerHTML="";so.innerHTML="";return;}
  const bc=pfHero(PF.g)==="M"?((CH.live&&CH.live.bot4)||(D.sh_cards||[]).filter(c=>c.src==="M")).filter(c=>c.state==="open")
   :(D.lb_cards||[]).filter(c=>c.state==="open");
@@ -3964,13 +4088,13 @@ function pfPaint(){
  if(!g){document.getElementById("pfBotK").innerHTML=PF.meta&&!PF.meta.ready?`<div class="qempty">الخادم يحسب الدفاتر لأول مرة (ثوانٍ)…</div>`:(PF.err?`<div class="pferr">تعذّر جلب المحفظة: ${qEsc(PF.err)}</div>`:`<div class="qempty">جارٍ التحميل…</div>`);
   document.getElementById("pfBotDW").innerHTML="";document.getElementById("pfBotT").innerHTML="";}
  else{
-  const hero=pfHero(PF.g), kb=g[hero];
-  document.querySelector("#vPf .pfh2").firstChild.textContent=hero==="M"?"بوت السيولة الجديد · الاندفاع ":"البوت الفعلي ";
+  const hero=pfHero(PF.g), kb=hero?g[hero]:null;
+  document.getElementById("pfBotH").firstChild.textContent=hero==="M"?"بوت السيولة الجديد · الاندفاع ":"البوت الفعلي ";
   document.getElementById("pfBotRule").textContent=hero==="M"?"السلّم الثاني: −40% ثم 0 عند +50% ثم الدرجة −100 · 60 د · 15:45 · مساحة ≥30 · مركزان كحد أقصى"
    :"خروجه الحي: وقف −40% بلمسة · تسليح +30% · متحرك −25% بقراءتين · 15:45";
-  document.getElementById("pfBotK").innerHTML=pfKpi(kb);
-  document.getElementById("pfBotDW").innerHTML=pfDW(kb);
-  document.getElementById("pfBotT").innerHTML=pfTable(PF.bot);
+  document.getElementById("pfBotK").innerHTML=hero?pfKpi(kb):"";
+  document.getElementById("pfBotDW").innerHTML=hero?pfDW(kb):"";
+  document.getElementById("pfBotT").innerHTML=hero?pfTable(PF.bot):"";
  }
  const ss=pfStrats(),names=(PF.meta&&PF.meta.names)||{};
  document.getElementById("pfS").innerHTML=ss.length?ss.map(k=>{const v=g[k];
